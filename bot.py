@@ -309,8 +309,10 @@ def buy_config(call):
         links = panel_create_profiles(
             name_prefix=name_prefix,
             count=plan["profiles"],
-            days=plan["days"]
+            days=plan["days"],
+            conn_limit=plan["conn_limit"]
         )
+
     except Exception as e:
         bot.edit_message_text(
             f"❌ خطا در ساخت کانفیگ از پنل. مبلغی از حساب شما کم نشد.\n\nجزئیات خطا: {e}",
