@@ -27,7 +27,7 @@ PANEL_API_KEY = os.environ.get("PANEL_API_KEY", "nahan_mrlmsp7c_7lg9rlf0")
 
 # فقط برای عیب‌یابی/فال‌بک - رمز قبلی لو رفته بود، پس خالی گذاشتیمش.
 # اگه لازم شد، مقدار Master Key جدید رو فقط به‌صورت Environment Variable ست کن، نه اینجا داخل کد.
-PANEL_MASTER_KEY_FALLBACK = os.environ.get("PANEL_MASTER_KEY", "admin")
+PANEL_MASTER_KEY_FALLBACK = os.environ.get("PANEL_MASTER_KEY", "vala1392")
 
 PANEL_AUTH_HEADERS = {"Authorization": f"Bearer {PANEL_API_KEY}"}
 
