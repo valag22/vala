@@ -16,9 +16,10 @@ from telebot.types import (
 # بهتره این‌ها رو به‌جای این‌که مستقیم این‌جا بنویسی، از متغیرهای محیطی (Environment Variables) بخونی.
 # فعلاً برای راحتی همینجا گذاشتم ولی توصیه می‌کنم بعداً جابه‌جا کنی.
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8921489424:AAGn6Bawl-fkwTHg00ZYDmpYKvARXf6OCXo")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8475807309:AAGOVNKrtK7RsJJGeHJQBlcq6YZi513iSlo")
 
 PANEL_BASE = os.environ.get("PANEL_BASE", "https://little-waterfall-27fa.berbrtokamma.workers.dev")
+
 PANEL_API_ROUTE = os.environ.get("PANEL_API_ROUTE", "sync")   # همون بخش اول آدرس (مثلا .../sync/dash)
 
 # ترجیحاً از Panel API Key استفاده کن (نه Master Key) - دسترسی محدودتر و قابل ابطال جداگانه‌ست.
@@ -26,7 +27,7 @@ PANEL_API_KEY = os.environ.get("PANEL_API_KEY", "nahan_mrlmsp7c_7lg9rlf0")
 
 # فقط برای عیب‌یابی/فال‌بک - رمز قبلی لو رفته بود، پس خالی گذاشتیمش.
 # اگه لازم شد، مقدار Master Key جدید رو فقط به‌صورت Environment Variable ست کن، نه اینجا داخل کد.
-PANEL_MASTER_KEY_FALLBACK = os.environ.get("PANEL_MASTER_KEY", "vala1392")
+PANEL_MASTER_KEY_FALLBACK = os.environ.get("PANEL_MASTER_KEY", "admin")
 
 PANEL_AUTH_HEADERS = {"Authorization": f"Bearer {PANEL_API_KEY}"}
 
@@ -61,12 +62,12 @@ except sqlite3.OperationalError:
 
 
 # ================= PLANS =================
-# key: callback_data suffix, value: (عنوان فارسی, قیمت, تعداد کانفیگ, روز اعتبار)
+# conn_limit: تعداد اتصال هم‌زمان مجاز (فیلد واقعی پنل: connLimit). None یعنی نامحدود.
 
 PLANS = {
-    "single": {"title": "یک کاربره", "price": 60000, "profiles": 1, "days": 30},
-    "double": {"title": "دو کاربره", "price": 70000, "profiles": 2, "days": 30},
-    "unlimited": {"title": "نامحدود", "price": 90000, "profiles": 1, "days": 30},
+    "single": {"title": "یک کاربره", "price": 60000, "profiles": 1, "days": 30, "conn_limit": 1},
+    "double": {"title": "دو کاربره", "price": 70000, "profiles": 1, "days": 30, "conn_limit": 2},
+    "unlimited": {"title": "نامحدود", "price": 90000, "profiles": 1, "days": 30, "conn_limit": None},
 }
 
 # ================= TRIAL =================
@@ -169,12 +170,13 @@ def panel_sync(config, key):
     return data.get("newRoute", config.get("apiRoute", PANEL_API_ROUTE))
 
 
-def panel_create_profiles(name_prefix, count, days, traffic_gb=None):
+def panel_create_profiles(name_prefix, count, days, traffic_gb=None, conn_limit=None):
     """
     یک یا چند پروفایل (کاربر) جدید روی پنل نهان می‌سازه و
     لینک‌های اشتراک (Subscription) رو برمی‌گردونه.
 
     traffic_gb: اگه مقدار بدی، سقف مصرف (بر حسب گیگابایت) هم روی کاربر ست میشه.
+    conn_limit: اگه مقدار بدی، تعداد اتصال هم‌زمان مجاز (connLimit) محدود میشه.
     """
     config, working_key = panel_auth()
 
@@ -197,6 +199,9 @@ def panel_create_profiles(name_prefix, count, days, traffic_gb=None):
 
         if traffic_gb is not None:
             user_obj["limitTotalReq"] = round(traffic_gb * REQ_PER_GB)
+
+        if conn_limit is not None:
+            user_obj["connLimit"] = conn_limit
 
         config["users"].append(user_obj)
         new_names.append(name)
@@ -252,7 +257,7 @@ def buy_menu(message):
 
     bot.reply_to(
         message,
-        "پلن مورد نظر را انتخاب کنید:,حجم همه کانفیگ ها نامحدود هست",
+        "پلن مورد نظر را انتخاب کنید:",
         reply_markup=keyboard
     )
 
@@ -312,7 +317,6 @@ def buy_config(call):
             days=plan["days"],
             conn_limit=plan["conn_limit"]
         )
-
     except Exception as e:
         bot.edit_message_text(
             f"❌ خطا در ساخت کانفیگ از پنل. مبلغی از حساب شما کم نشد.\n\nجزئیات خطا: {e}",
@@ -436,13 +440,12 @@ def card(message):
         """
 مبلغ را به شماره کارت زیر واریز کنید:
 
-`8673 2559 1411 6362`
+8673 2559 1411 6362
 
 امیر والا شریف نسب
 
 بعد از پرداخت رسید را ارسال کنید. ادمین ما چک میکنه و پول به حساب شما میاد
-""",
-        parse_mode="Markdown"
+"""
     )
 
 
@@ -467,9 +470,7 @@ def my_info(message):
 💰 موجودی کیف پول: {balance:,} تومان"""
     )
 
-@bot.message_handler(func=lambda m: m.text == "پشتیبانی👇")
-def support(message):
-    bot.reply_to(message, "id admin = @valaorp")
+
 # ================= ADMIN RECEIPT =================
 
 @bot.message_handler(content_types=['photo'])
