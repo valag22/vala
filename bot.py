@@ -257,7 +257,7 @@ def buy_menu(message):
 
     bot.reply_to(
         message,
-        "پلن مورد نظر را انتخاب کنید:",
+        "پلن مورد نظر را انتخاب کنید:,حجم همه کانفیگ ها نامحدود هست",
         reply_markup=keyboard
     )
 
