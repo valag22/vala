@@ -244,6 +244,7 @@ def start(message):
     bot.reply_to(
         message,
         "به بات کانفیگ فرا زمین خوش آمدید",
+    
         reply_markup=reply_keyboard
     )
 
@@ -269,7 +270,7 @@ def buy_menu(message):
         reply_markup=keyboard
     )
 @bot.message_handler(func=lambda m: m.text == "پشتیبانی👇")
-def buy_menu(message):
+def buy(message):
     v = InlineKeyboardMarkup()
     v.add(InlineKeyboardButton("id admin = @valaorp"))
 
