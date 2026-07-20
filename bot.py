@@ -99,12 +99,6 @@ reply_keyboard.add(
 )
 
 
-
-
-
-
-
-
 # ================= PANEL API =================
 
 class PanelError(Exception):
@@ -269,10 +263,21 @@ def buy_menu(message):
         "پلن مورد نظر را انتخاب کنید:,حجم همه کانفیگ ها نامحدود هست",
         reply_markup=keyboard
     )
+
+
 @bot.message_handler(func=lambda m: m.text == "پشتیبانی👇")
-def buy(message):
-    v = InlineKeyboardMarkup()
-    v.add(InlineKeyboardButton("id admin = @valaorp"))
+def support(message):
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(
+        InlineKeyboardButton("💬 ارتباط با پشتیبانی", url="https://t.me/valaorp")
+    )
+
+    bot.reply_to(
+        message,
+        "برای ارتباط با پشتیبانی روی دکمه زیر بزنید:",
+        reply_markup=keyboard
+    )
+
 
 # ================= BUY CHECK =================
 
