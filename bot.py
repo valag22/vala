@@ -75,6 +75,8 @@ PLANS = {
 TRIAL_TRAFFIC_GB = 0.05   # 50 مگابایت
 TRIAL_DAYS = 1            # اعتبار کانفیگ تست
 
+
+
 # ✅ تایید شده از داشبورد خود پنل: فیلد واقعی "limitTotalReq"ه، نه یه فیلد GB مستقیم.
 # پنل خودش GB رو به تعداد درخواست تبدیل می‌کنه. با یه کاربر نمونه که ادمین دستی با
 # "Traffic (GB) Limit" = 1 ساخت، مقدار limitTotalReq برابر 3000 بود.
@@ -95,6 +97,12 @@ reply_keyboard.add(
     "اطلاعات من✨",
     "پشتیبانی👇"
 )
+
+
+
+
+
+
 
 
 # ================= PANEL API =================
@@ -260,7 +268,10 @@ def buy_menu(message):
         "پلن مورد نظر را انتخاب کنید:,حجم همه کانفیگ ها نامحدود هست",
         reply_markup=keyboard
     )
-
+@bot.message_handler(func=lambda m: m.text == "پشتیبانی👇")
+def buy_menu(message):
+    v = InlineKeyboardMarkup()
+    v.add(InlineKeyboardButton("id admin = @valaorp"))
 
 # ================= BUY CHECK =================
 
