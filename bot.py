@@ -16,7 +16,7 @@ from telebot.types import (
 # بهتره این‌ها رو به‌جای این‌که مستقیم این‌جا بنویسی، از متغیرهای محیطی (Environment Variables) بخونی.
 # فعلاً برای راحتی همینجا گذاشتم ولی توصیه می‌کنم بعداً جابه‌جا کنی.
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8921489424:AAGn6Bawl-fkwTHg00ZYDmpYKvARXf6OCXo")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8921489424:AAFCrTyaD6S-Zd2sFav_7-WBH9KQDfB7Cmk")
 
 PANEL_BASE = os.environ.get("PANEL_BASE", "https://little-waterfall-27fa.berbrtokamma.workers.dev")
 
