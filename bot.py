@@ -32,7 +32,7 @@ ADMIN_ID = 6059940165
 # ⚠️ حتما این رو با یوزرنیم کانال واقعیت عوض کن، و بات رو ادمین کانال کن
 # (وگرنه get_chat_member خطا میده و همه رد میشن).
 FORCE_JOIN_ENABLED = True
-FORCE_JOIN_CHANNEL = os.environ.get("FORCE_JOIN_CHANNEL", "@YourChannelUsername")
+FORCE_JOIN_CHANNEL = os.environ.get("FORCE_JOIN_CHANNEL", "@configfarazamin")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
