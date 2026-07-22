@@ -13,25 +13,26 @@ from telebot.types import (
 
 
 # ================= CONFIG =================
-# بهتره این‌ها رو به‌جای این‌که مستقیم این‌جا بنویسی، از متغیرهای محیطی (Environment Variables) بخونی.
-# فعلاً برای راحتی همینجا گذاشتم ولی توصیه می‌کنم بعداً جابه‌جا کنی.
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8921489424:AAFCrTyaD6S-Zd2sFav_7-WBH9KQDfB7Cmk")
 
 PANEL_BASE = os.environ.get("PANEL_BASE", "https://little-waterfall-27fa.berbrtokamma.workers.dev")
+PANEL_API_ROUTE = os.environ.get("PANEL_API_ROUTE", "sync")
 
-PANEL_API_ROUTE = os.environ.get("PANEL_API_ROUTE", "sync")   # همون بخش اول آدرس (مثلا .../sync/dash)
-
-# ترجیحاً از Panel API Key استفاده کن (نه Master Key) - دسترسی محدودتر و قابل ابطال جداگانه‌ست.
 PANEL_API_KEY = os.environ.get("PANEL_API_KEY", "nahan_mrlmsp7c_7lg9rlf0")
-
-# فقط برای عیب‌یابی/فال‌بک - رمز قبلی لو رفته بود، پس خالی گذاشتیمش.
-# اگه لازم شد، مقدار Master Key جدید رو فقط به‌صورت Environment Variable ست کن، نه اینجا داخل کد.
 PANEL_MASTER_KEY_FALLBACK = os.environ.get("PANEL_MASTER_KEY", "vala1392")
 
 PANEL_AUTH_HEADERS = {"Authorization": f"Bearer {PANEL_API_KEY}"}
 
 ADMIN_ID = 6059940165
+
+# ================= FORCE JOIN =================
+# قبل از استفاده از بات، کاربر باید عضو این کانال باشه.
+# یوزرنیم کانال رو با @ بذار، مثلا "@mychannel"
+# ⚠️ حتما این رو با یوزرنیم کانال واقعیت عوض کن، و بات رو ادمین کانال کن
+# (وگرنه get_chat_member خطا میده و همه رد میشن).
+FORCE_JOIN_ENABLED = True
+FORCE_JOIN_CHANNEL = os.environ.get("FORCE_JOIN_CHANNEL", "@YourChannelUsername")
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -50,19 +51,16 @@ CREATE TABLE IF NOT EXISTS users (
     trial_used INTEGER DEFAULT 0
 )
 """)
-
 conn.commit()
 
-# اگه دیتابیس از قبل بدون ستون trial_used ساخته شده، اضافه‌ش کن
 try:
     cursor.execute("ALTER TABLE users ADD COLUMN trial_used INTEGER DEFAULT 0")
     conn.commit()
 except sqlite3.OperationalError:
-    pass  # ستون از قبل وجود داره
+    pass
 
 
 # ================= PLANS =================
-# conn_limit: تعداد اتصال هم‌زمان مجاز (فیلد واقعی پنل: connLimit). None یعنی نامحدود.
 
 PLANS = {
     "single": {"title": "یک کاربره", "price": 60000, "profiles": 1, "days": 30, "conn_limit": 1},
@@ -72,24 +70,14 @@ PLANS = {
 
 # ================= TRIAL =================
 
-TRIAL_TRAFFIC_GB = 0.05   # 50 مگابایت
-TRIAL_DAYS = 1            # اعتبار کانفیگ تست
-
-
-
-# ✅ تایید شده از داشبورد خود پنل: فیلد واقعی "limitTotalReq"ه، نه یه فیلد GB مستقیم.
-# پنل خودش GB رو به تعداد درخواست تبدیل می‌کنه. با یه کاربر نمونه که ادمین دستی با
-# "Traffic (GB) Limit" = 1 ساخت، مقدار limitTotalReq برابر 3000 بود.
-# پس نسبت تبدیل: هر 1 گیگابایت = 3000 درخواست
+TRIAL_TRAFFIC_GB = 0.05
+TRIAL_DAYS = 1
 REQ_PER_GB = 6000
 
 
 # ================= KEYBOARD =================
 
-reply_keyboard = ReplyKeyboardMarkup(
-    resize_keyboard=True, row_width=2
-)
-
+reply_keyboard = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
 reply_keyboard.add(
     "خرید کانفیگ🛒",
     "تست رایگان🕧",
@@ -99,6 +87,53 @@ reply_keyboard.add(
 )
 
 
+# ================= FORCE JOIN HELPERS =================
+
+def is_member(user_id):
+    """چک می‌کنه کاربر عضو کانال اجباری هست یا نه."""
+    if not FORCE_JOIN_ENABLED:
+        return True
+    try:
+        member = bot.get_chat_member(FORCE_JOIN_CHANNEL, user_id)
+        return member.status in ("member", "administrator", "creator")
+    except Exception:
+        # اگه بات ادمین کانال نباشه یا خطای دیگه‌ای بخوره، برای امنیت false برمی‌گردونیم
+        return False
+
+
+def send_join_prompt(chat_id):
+    keyboard = InlineKeyboardMarkup()
+    channel_url = f"https://t.me/{FORCE_JOIN_CHANNEL.lstrip('@')}"
+    keyboard.add(InlineKeyboardButton("📢 عضویت در کانال", url=channel_url))
+    keyboard.add(InlineKeyboardButton("✅ عضو شدم", callback_data="check_join"))
+    bot.send_message(
+        chat_id,
+        "برای استفاده از بات، ابتدا باید عضو کانال ما بشید. بعد از عضویت روی «عضو شدم» بزنید.",
+        reply_markup=keyboard
+    )
+
+
+def require_join(message):
+    """اگه کاربر عضو نبود، پیام عضویت رو می‌فرسته و False برمی‌گردونه."""
+    if is_member(message.from_user.id):
+        return True
+    send_join_prompt(message.chat.id)
+    return False
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "check_join")
+def check_join_callback(call):
+    if is_member(call.from_user.id):
+        bot.answer_callback_query(call.id, "✅ عضویت شما تایید شد")
+        bot.edit_message_text(
+            "✅ عضویت شما تایید شد. حالا می‌تونید از منو استفاده کنید.",
+            call.message.chat.id,
+            call.message.message_id
+        )
+    else:
+        bot.answer_callback_query(call.id, "❌ هنوز عضو کانال نشدید", show_alert=True)
+
+
 # ================= PANEL API =================
 
 class PanelError(Exception):
@@ -106,15 +141,6 @@ class PanelError(Exception):
 
 
 def panel_auth():
-    """
-    با پنل تلاش می‌کنه وصل بشه. چون مطمئن نیستیم دقیقاً پنل کلید رو با چه روشی
-    قبول می‌کنه، چند حالت رو خودکار امتحان می‌کنیم:
-    1) Panel API Key
-    2) Master Key (fallback، فقط اگه ست شده باشه)
-    اگه همه شکست خوردن، خطای کامل (همه‌ی تلاش‌ها) رو برمی‌گردونه.
-
-    خروجی: (config, working_key) - working_key همونیه که موفق بود، برای استفاده در panel_sync.
-    """
     url = f"{PANEL_BASE}/{PANEL_API_ROUTE}/api/auth"
 
     attempts = []
@@ -154,7 +180,6 @@ def panel_auth():
 
 
 def panel_sync(config, key):
-    """کانفیگ جدید رو با همون کلیدی که در panel_auth کار کرد، روی پنل ذخیره می‌کنه."""
     url = f"{PANEL_BASE}/{PANEL_API_ROUTE}/api/sync"
     resp = requests.post(
         url,
@@ -173,13 +198,6 @@ def panel_sync(config, key):
 
 
 def panel_create_profiles(name_prefix, count, days, traffic_gb=None, conn_limit=None):
-    """
-    یک یا چند پروفایل (کاربر) جدید روی پنل نهان می‌سازه و
-    لینک‌های اشتراک (Subscription) رو برمی‌گردونه.
-
-    traffic_gb: اگه مقدار بدی، سقف مصرف (بر حسب گیگابایت) هم روی کاربر ست میشه.
-    conn_limit: اگه مقدار بدی، تعداد اتصال هم‌زمان مجاز (connLimit) محدود میشه.
-    """
     config, working_key = panel_auth()
 
     if config.get("users") is None:
@@ -223,24 +241,19 @@ def panel_create_profiles(name_prefix, count, days, traffic_gb=None, conn_limit=
 def start(message):
 
     cursor.execute(
-        """
-        INSERT OR IGNORE INTO users(user_id, username)
-        VALUES (?,?)
-        """,
-        (
-            message.from_user.id,
-            message.from_user.username
-        )
+        "INSERT OR IGNORE INTO users(user_id, username) VALUES (?,?)",
+        (message.from_user.id, message.from_user.username)
     )
-
     conn.commit()
 
     bot.reply_to(
         message,
         "به بات کانفیگ فرا زمین خوش آمدید",
-    
         reply_markup=reply_keyboard
     )
+
+    if not is_member(message.from_user.id):
+        send_join_prompt(message.chat.id)
 
 
 # ================= BUY MENU =================
@@ -248,8 +261,10 @@ def start(message):
 @bot.message_handler(func=lambda m: m.text == "خرید کانفیگ🛒")
 def buy_menu(message):
 
-    keyboard = InlineKeyboardMarkup()
+    if not require_join(message):
+        return
 
+    keyboard = InlineKeyboardMarkup()
     for key, plan in PLANS.items():
         keyboard.add(
             InlineKeyboardButton(
@@ -260,7 +275,7 @@ def buy_menu(message):
 
     bot.reply_to(
         message,
-        "پلن مورد نظر را انتخاب کنید:,حجم همه کانفیگ ها نامحدود هست",
+        "پلن مورد نظر را انتخاب کنید، حجم همه کانفیگ‌ها نامحدود هست",
         reply_markup=keyboard
     )
 
@@ -268,27 +283,23 @@ def buy_menu(message):
 @bot.message_handler(func=lambda m: m.text == "پشتیبانی👇")
 def support(message):
     keyboard = InlineKeyboardMarkup()
-    keyboard.add(
-        InlineKeyboardButton("💬 ارتباط با پشتیبانی", url="https://t.me/valaorp")
-    )
-
-    bot.reply_to(
-        message,
-        "برای ارتباط با پشتیبانی روی دکمه زیر بزنید:",
-        reply_markup=keyboard
-    )
+    keyboard.add(InlineKeyboardButton("💬 ارتباط با پشتیبانی", url="https://t.me/valaorp"))
+    bot.reply_to(message, "برای ارتباط با پشتیبانی روی دکمه زیر بزنید:", reply_markup=keyboard)
 
 
 # ================= BUY CHECK =================
 
-@bot.callback_query_handler(
-    func=lambda call: call.data.startswith("buy_")
-)
+@bot.callback_query_handler(func=lambda call: call.data.startswith("buy_"))
 def buy_config(call):
 
     user_id = call.from_user.id
-    plan_key = call.data.split("_", 1)[1]
 
+    if not is_member(user_id):
+        bot.answer_callback_query(call.id, "ابتدا باید عضو کانال بشید", show_alert=True)
+        send_join_prompt(call.message.chat.id)
+        return
+
+    plan_key = call.data.split("_", 1)[1]
     plan = PLANS.get(plan_key)
     if plan is None:
         bot.answer_callback_query(call.id, "پلن نامعتبر است")
@@ -296,10 +307,7 @@ def buy_config(call):
 
     price = plan["price"]
 
-    cursor.execute(
-        "SELECT balance FROM users WHERE user_id=?",
-        (user_id,)
-    )
+    cursor.execute("SELECT balance FROM users WHERE user_id=?", (user_id,))
     user = cursor.fetchone()
 
     if user is None:
@@ -311,19 +319,10 @@ def buy_config(call):
     if balance < price:
         bot.reply_to(
             call.message,
-            f"""
-❌ موجودی کافی نیست
-
-قیمت:
-{price:,} تومان
-
-موجودی شما:
-{balance:,} تومان
-"""
+            f"❌ موجودی کافی نیست\n\nقیمت:\n{price:,} تومان\n\nموجودی شما:\n{balance:,} تومان"
         )
         return
 
-    # اول بهش اطلاع بده داره پردازش میشه (ساخت کانفیگ ممکنه چند ثانیه طول بکشه)
     processing_msg = bot.reply_to(call.message, "⏳ در حال ساخت کانفیگ...")
 
     try:
@@ -342,23 +341,12 @@ def buy_config(call):
         )
         return
 
-    # فقط اگه ساخت کانفیگ موفق بود، از موجودی کم کن
-    cursor.execute(
-        """
-        UPDATE users
-        SET balance = balance - ?
-        WHERE user_id=?
-        """,
-        (price, user_id)
-    )
+    cursor.execute("UPDATE users SET balance = balance - ? WHERE user_id=?", (price, user_id))
     conn.commit()
 
     config_text = "\n".join(links)
 
-    cursor.execute(
-        "UPDATE users SET config = ? WHERE user_id = ?",
-        (config_text, user_id)
-    )
+    cursor.execute("UPDATE users SET config = ? WHERE user_id = ?", (config_text, user_id))
     conn.commit()
 
     bot.edit_message_text(
@@ -381,12 +369,12 @@ def buy_config(call):
 @bot.message_handler(func=lambda m: m.text == "تست رایگان🕧")
 def free_trial(message):
 
+    if not require_join(message):
+        return
+
     user_id = message.from_user.id
 
-    cursor.execute(
-        "SELECT trial_used FROM users WHERE user_id=?",
-        (user_id,)
-    )
+    cursor.execute("SELECT trial_used FROM users WHERE user_id=?", (user_id,))
     row = cursor.fetchone()
 
     if row is None:
@@ -400,10 +388,7 @@ def free_trial(message):
         trial_used = row[0]
 
     if trial_used:
-        bot.reply_to(
-            message,
-            "❌ شما قبلاً از تست رایگان استفاده کرده‌اید. برای خرید از منوی «خرید کانفیگ» استفاده کنید."
-        )
+        bot.reply_to(message, "❌ شما قبلاً از تست رایگان استفاده کرده‌اید. برای خرید از منوی «خرید کانفیگ» استفاده کنید.")
         return
 
     processing_msg = bot.reply_to(message, "⏳ در حال ساخت کانفیگ تست...")
@@ -424,10 +409,7 @@ def free_trial(message):
         )
         return
 
-    cursor.execute(
-        "UPDATE users SET trial_used = 1 WHERE user_id = ?",
-        (user_id,)
-    )
+    cursor.execute("UPDATE users SET trial_used = 1 WHERE user_id = ?", (user_id,))
     conn.commit()
 
     config_text = "\n".join(links)
@@ -452,6 +434,9 @@ def free_trial(message):
 @bot.message_handler(func=lambda m: m.text == "کارت به کارت💲")
 def card(message):
 
+    if not require_join(message):
+        return
+
     bot.reply_to(
         message,
         """
@@ -468,12 +453,13 @@ def card(message):
 
 @bot.message_handler(func=lambda message: message.text == "اطلاعات من✨")
 def my_info(message):
+
+    if not require_join(message):
+        return
+
     user_id = message.from_user.id
 
-    cursor.execute(
-        "SELECT balance FROM users WHERE user_id = ?",
-        (user_id,)
-    )
+    cursor.execute("SELECT balance FROM users WHERE user_id = ?", (user_id,))
     result = cursor.fetchone()
 
     balance = result[0] if result else 0
@@ -493,11 +479,7 @@ def my_info(message):
 @bot.message_handler(content_types=['photo'])
 def receipt(message):
 
-    bot.forward_message(
-        ADMIN_ID,
-        message.chat.id,
-        message.message_id
-    )
+    bot.forward_message(ADMIN_ID, message.chat.id, message.message_id)
 
     bot.send_message(
         ADMIN_ID,
@@ -514,21 +496,15 @@ def receipt(message):
 مثال: /charge {message.from_user.id} 60000"""
     )
 
-    bot.reply_to(
-        message,
-        "✅ رسید ارسال شد، پس از تایید ادمین موجودی شما شارژ می‌شود."
-    )
+    bot.reply_to(message, "✅ رسید ارسال شد، پس از تایید ادمین موجودی شما شارژ می‌شود.")
 
 
 # ================= ADMIN CHARGE COMMAND =================
 
-@bot.message_handler(
-    func=lambda m: m.text and m.text.startswith("/charge") and m.from_user.id == ADMIN_ID
-)
+@bot.message_handler(func=lambda m: m.text and m.text.startswith("/charge") and m.from_user.id == ADMIN_ID)
 def admin_charge(message):
 
     parts = message.text.split()
-
     if len(parts) != 3:
         bot.reply_to(message, "فرمت درست: /charge <user_id> <amount>")
         return
@@ -540,14 +516,8 @@ def admin_charge(message):
         bot.reply_to(message, "user_id و amount باید عدد باشند")
         return
 
-    cursor.execute(
-        "INSERT OR IGNORE INTO users(user_id) VALUES (?)",
-        (target_id,)
-    )
-    cursor.execute(
-        "UPDATE users SET balance = balance + ? WHERE user_id = ?",
-        (amount, target_id)
-    )
+    cursor.execute("INSERT OR IGNORE INTO users(user_id) VALUES (?)", (target_id,))
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, target_id))
     conn.commit()
 
     cursor.execute("SELECT balance FROM users WHERE user_id=?", (target_id,))
@@ -563,12 +533,10 @@ def admin_charge(message):
 
 # ================= ADMIN PANEL DIAGNOSTIC =================
 
-@bot.message_handler(
-    func=lambda m: m.text and m.text.startswith("/testpanel") and m.from_user.id == ADMIN_ID
-)
+@bot.message_handler(func=lambda m: m.text and m.text.startswith("/testpanel") and m.from_user.id == ADMIN_ID)
 def admin_test_panel(message):
 
-    bot.reply_to(message, "⏳ در حال تست اتصال به پنل (۶ حالت)...")
+    bot.reply_to(message, "⏳ در حال تست اتصال به پنل...")
 
     url = f"{PANEL_BASE}/{PANEL_API_ROUTE}/api/auth"
 
@@ -588,10 +556,8 @@ def admin_test_panel(message):
     report_lines = [f"🔍 نتیجه تست اتصال به پنل\nURL: {url}\n"]
 
     for label, key, use_header, use_body in test_cases:
-
         headers = {}
         body = {}
-
         if use_header:
             headers["Authorization"] = f"Bearer {key}"
         if use_body:
@@ -601,46 +567,34 @@ def admin_test_panel(message):
             resp = requests.post(url, headers=headers, json=body, timeout=15)
             status = resp.status_code
             snippet = resp.text[:200].replace("\n", " ")
-
             if status == 200:
                 try:
                     data = resp.json()
-                    ok = data.get("success", False)
-                    mark = "✅" if ok else "⚠️"
+                    mark = "✅" if data.get("success", False) else "⚠️"
                 except Exception:
                     mark = "⚠️"
             else:
                 mark = "❌"
-
-            report_lines.append(
-                f"{mark} {label}\nStatus: {status}\nPasokh: {snippet}\n"
-            )
-
+            report_lines.append(f"{mark} {label}\nStatus: {status}\nPasokh: {snippet}\n")
         except Exception as e:
             report_lines.append(f"❌ {label}\nError: {e}\n")
 
     full_report = "\n".join(report_lines)
-
-    # تلگرام محدودیت طول پیام داره، اگه طولانی بود تیکه‌تیکه بفرست
     for i in range(0, len(full_report), 3500):
         bot.send_message(message.chat.id, full_report[i:i+3500])
 
 
-# ================= ADMIN: DUMP USER JSON (برای پیدا کردن اسم فیلد سقف مصرف) =================
+# ================= ADMIN: DUMP USER JSON =================
 
-@bot.message_handler(
-    func=lambda m: m.text and m.text.startswith("/dumpuser") and m.from_user.id == ADMIN_ID
-)
+@bot.message_handler(func=lambda m: m.text and m.text.startswith("/dumpuser") and m.from_user.id == ADMIN_ID)
 def admin_dump_user(message):
 
     parts = message.text.split(maxsplit=1)
-
     if len(parts) != 2:
         bot.reply_to(message, "فرمت درست: /dumpuser <اسم دقیق کاربر>")
         return
 
     target_name = parts[1].strip()
-
     bot.reply_to(message, "⏳ در حال گرفتن اطلاعات از پنل...")
 
     try:
@@ -650,15 +604,11 @@ def admin_dump_user(message):
         return
 
     users = config.get("users") or []
-
     matches = [u for u in users if u.get("name") == target_name]
 
     if not matches:
         names = ", ".join([str(u.get("name")) for u in users][:30])
-        bot.reply_to(
-            message,
-            f"❌ کاربری با اسم '{target_name}' پیدا نشد.\n\nاسم‌های موجود (حداکثر ۳۰ تا):\n{names}"
-        )
+        bot.reply_to(message, f"❌ کاربری با اسم '{target_name}' پیدا نشد.\n\nاسم‌های موجود (حداکثر ۳۰ تا):\n{names}")
         return
 
     import json as _json
@@ -666,6 +616,121 @@ def admin_dump_user(message):
 
     for i in range(0, len(dump), 3500):
         bot.send_message(message.chat.id, f"```\n{dump[i:i+3500]}\n```", parse_mode="Markdown")
+
+
+# ================= ADMIN PANEL (مدیریت) =================
+
+@bot.message_handler(commands=['admin'])
+def admin_panel(message):
+
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("📊 آمار", callback_data="admin_stats"),
+        InlineKeyboardButton("📢 پیام همگانی", callback_data="admin_broadcast"),
+    )
+    keyboard.add(
+        InlineKeyboardButton("👥 لیست کاربران برتر", callback_data="admin_userlist"),
+        InlineKeyboardButton("🔍 جستجوی کاربر", callback_data="admin_search"),
+    )
+
+    bot.send_message(message.chat.id, "🛠 پنل مدیریت بات", reply_markup=keyboard)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_"))
+def admin_callbacks(call):
+
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "⛔️ دسترسی ندارید", show_alert=True)
+        return
+
+    action = call.data
+    bot.answer_callback_query(call.id)
+
+    if action == "admin_stats":
+        cursor.execute("SELECT COUNT(*), COALESCE(SUM(balance),0) FROM users")
+        total_users, total_balance = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*) FROM users WHERE trial_used=1")
+        trial_count = cursor.fetchone()[0]
+
+        text = f"""📊 آمار بات
+
+👥 تعداد کل کاربران: {total_users:,}
+🧪 استفاده از تست رایگان: {trial_count:,}
+💰 مجموع موجودی کیف پول‌ها: {total_balance:,} تومان"""
+        bot.send_message(call.message.chat.id, text)
+
+    elif action == "admin_broadcast":
+        msg = bot.send_message(call.message.chat.id, "پیامی که می‌خوای برای همه کاربران ارسال بشه رو بفرست:")
+        bot.register_next_step_handler(msg, process_broadcast)
+
+    elif action == "admin_userlist":
+        cursor.execute("SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 30")
+        rows = cursor.fetchall()
+        if not rows:
+            bot.send_message(call.message.chat.id, "کاربری وجود نداره")
+            return
+        lines = [f"{uid} — {bal:,} تومان" for uid, bal in rows]
+        bot.send_message(call.message.chat.id, "👥 ۳۰ کاربر برتر (بر اساس موجودی):\n\n" + "\n".join(lines))
+
+    elif action == "admin_search":
+        msg = bot.send_message(call.message.chat.id, "آیدی عددی کاربر مورد نظر رو بفرست:")
+        bot.register_next_step_handler(msg, process_search)
+
+
+def process_broadcast(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    text = message.text
+    cursor.execute("SELECT user_id FROM users")
+    all_ids = [row[0] for row in cursor.fetchall()]
+
+    sent = 0
+    failed = 0
+    for uid in all_ids:
+        try:
+            bot.send_message(uid, text)
+            sent += 1
+        except Exception:
+            failed += 1
+        time.sleep(0.05)
+
+    bot.send_message(message.chat.id, f"✅ پیام همگانی ارسال شد.\nموفق: {sent}\nناموفق: {failed}")
+
+
+def process_search(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    try:
+        target_id = int(message.text.strip())
+    except ValueError:
+        bot.reply_to(message, "آیدی باید عدد باشه")
+        return
+
+    cursor.execute(
+        "SELECT user_id, username, balance, trial_used, config FROM users WHERE user_id=?",
+        (target_id,)
+    )
+    row = cursor.fetchone()
+
+    if not row:
+        bot.reply_to(message, "کاربری با این آیدی پیدا نشد")
+        return
+
+    uid, username, balance, trial_used, config = row
+    text = f"""👤 اطلاعات کاربر
+
+🆔 آیدی: {uid}
+👤 یوزرنیم: @{username if username else '-'}
+💰 موجودی: {balance:,} تومان
+🧪 تست رایگان استفاده شده: {'بله' if trial_used else 'خیر'}
+🔑 آخرین کانفیگ:
+{config if config else '-'}"""
+    bot.reply_to(message, text)
 
 
 if __name__ == "__main__":
