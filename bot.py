@@ -13,6 +13,8 @@ from telebot.types import (
 
 
 # ================= CONFIG =================
+# ⚠️ توجه امنیتی: توکن و کلیدها رو فقط از env بخونید، مقدار پیش‌فرض hardcoded نذارید.
+# اگه این کد جایی public شده، همین الان توکن بات و کلیدهای پنل رو عوض کنید.
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8921489424:AAFCrTyaD6S-Zd2sFav_7-WBH9KQDfB7Cmk")
 
@@ -27,10 +29,6 @@ PANEL_AUTH_HEADERS = {"Authorization": f"Bearer {PANEL_API_KEY}"}
 ADMIN_ID = 6059940165
 
 # ================= FORCE JOIN =================
-# قبل از استفاده از بات، کاربر باید عضو این کانال باشه.
-# یوزرنیم کانال رو با @ بذار، مثلا "@mychannel"
-# ⚠️ حتما این رو با یوزرنیم کانال واقعیت عوض کن، و بات رو ادمین کانال کن
-# (وگرنه get_chat_member خطا میده و همه رد میشن).
 FORCE_JOIN_ENABLED = True
 FORCE_JOIN_CHANNEL = os.environ.get("FORCE_JOIN_CHANNEL", "@configfarazamin")
 
@@ -59,6 +57,28 @@ try:
 except sqlite3.OperationalError:
     pass
 
+# --- جدول جدید: تاریخچه‌ی کانفیگ‌های گرفته‌شده توسط هر کاربر ---
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS configs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    plan_title TEXT,
+    links TEXT,
+    price INTEGER DEFAULT 0,
+    created_at INTEGER
+)
+""")
+conn.commit()
+
+
+def save_config_history(user_id, plan_title, links, price=0):
+    """هر بار که کانفیگی (خرید یا تست) ساخته میشه، یه رکورد توی تاریخچه ذخیره میشه."""
+    cursor.execute(
+        "INSERT INTO configs (user_id, plan_title, links, price, created_at) VALUES (?,?,?,?,?)",
+        (user_id, plan_title, links, price, int(time.time()))
+    )
+    conn.commit()
+
 
 # ================= PLANS =================
 
@@ -83,6 +103,7 @@ reply_keyboard.add(
     "تست رایگان🕧",
     "کارت به کارت💲",
     "اطلاعات من✨",
+    "📜 کانفیگ‌های من",
     "پشتیبانی👇"
 )
 
@@ -90,14 +111,12 @@ reply_keyboard.add(
 # ================= FORCE JOIN HELPERS =================
 
 def is_member(user_id):
-    """چک می‌کنه کاربر عضو کانال اجباری هست یا نه."""
     if not FORCE_JOIN_ENABLED:
         return True
     try:
         member = bot.get_chat_member(FORCE_JOIN_CHANNEL, user_id)
         return member.status in ("member", "administrator", "creator")
     except Exception:
-        # اگه بات ادمین کانال نباشه یا خطای دیگه‌ای بخوره، برای امنیت false برمی‌گردونیم
         return False
 
 
@@ -114,7 +133,6 @@ def send_join_prompt(chat_id):
 
 
 def require_join(message):
-    """اگه کاربر عضو نبود، پیام عضویت رو می‌فرسته و False برمی‌گردونه."""
     if is_member(message.from_user.id):
         return True
     send_join_prompt(message.chat.id)
@@ -349,6 +367,9 @@ def buy_config(call):
     cursor.execute("UPDATE users SET config = ? WHERE user_id = ?", (config_text, user_id))
     conn.commit()
 
+    # ذخیره در تاریخچه
+    save_config_history(user_id, plan["title"], config_text, price)
+
     bot.edit_message_text(
         f"""✅ خرید موفق بود
 
@@ -414,6 +435,9 @@ def free_trial(message):
 
     config_text = "\n".join(links)
 
+    # ذخیره در تاریخچه
+    save_config_history(user_id, "تست رایگان", config_text, 0)
+
     bot.edit_message_text(
         f"""✅ کانفیگ تست شما ساخته شد
 
@@ -431,7 +455,6 @@ def free_trial(message):
 
 # ================= CARD TO CARD =================
 
- 
 @bot.message_handler(func=lambda m: m.text == "کارت به کارت💲")
 def card(message):
 
@@ -447,7 +470,6 @@ def card(message):
 بعد از پرداخت رسید را ارسال کنید. ادمین ما چک میکنه و پول به حساب شما میاد
 """
     )
-
 
 
 @bot.message_handler(func=lambda message: message.text == "اطلاعات من✨")
@@ -470,6 +492,85 @@ def my_info(message):
 🆔 شناسه: {user_id}
 
 💰 موجودی کیف پول: {balance:,} تومان"""
+    )
+
+
+# ================= تاریخچه کانفیگ‌ها (جدید) =================
+
+CONFIGS_PER_PAGE = 5
+
+
+def build_history_page(user_id, page):
+    """صفحه‌ی مشخصی از تاریخچه‌ی کانفیگ‌های کاربر رو برمی‌گردونه: (متن, تعداد کل)."""
+    cursor.execute("SELECT COUNT(*) FROM configs WHERE user_id=?", (user_id,))
+    total = cursor.fetchone()[0]
+
+    offset = page * CONFIGS_PER_PAGE
+    cursor.execute(
+        """SELECT plan_title, links, price, created_at
+           FROM configs WHERE user_id=?
+           ORDER BY created_at DESC
+           LIMIT ? OFFSET ?""",
+        (user_id, CONFIGS_PER_PAGE, offset)
+    )
+    rows = cursor.fetchall()
+
+    if not rows:
+        return "شما تا الان هیچ کانفیگی دریافت نکردید.", total
+
+    lines = [f"📜 کانفیگ‌های شما (صفحه {page+1}):\n"]
+    for plan_title, links, price, created_at in rows:
+        date_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(created_at))
+        price_str = f"{price:,} تومان" if price else "رایگان"
+        lines.append(
+            f"🔹 پلن: {plan_title}\n"
+            f"🗓 تاریخ: {date_str}\n"
+            f"💰 مبلغ: {price_str}\n"
+            f"🔑 لینک:\n{links}\n"
+        )
+
+    return "\n".join(lines), total
+
+
+def history_keyboard(user_id, page, total):
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    buttons = []
+    if page > 0:
+        buttons.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"hist_{page-1}"))
+    if (page + 1) * CONFIGS_PER_PAGE < total:
+        buttons.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"hist_{page+1}"))
+    if buttons:
+        keyboard.add(*buttons)
+    return keyboard
+
+
+@bot.message_handler(func=lambda m: m.text == "📜 کانفیگ‌های من")
+def config_history(message):
+
+    if not require_join(message):
+        return
+
+    user_id = message.from_user.id
+    text, total = build_history_page(user_id, page=0)
+    keyboard = history_keyboard(user_id, 0, total)
+
+    bot.reply_to(message, text, reply_markup=keyboard if total > CONFIGS_PER_PAGE else None)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("hist_"))
+def config_history_page(call):
+    user_id = call.from_user.id
+    page = int(call.data.split("_", 1)[1])
+
+    text, total = build_history_page(user_id, page)
+    keyboard = history_keyboard(user_id, page, total)
+
+    bot.answer_callback_query(call.id)
+    bot.edit_message_text(
+        text,
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=keyboard if total > CONFIGS_PER_PAGE else None
     )
 
 
