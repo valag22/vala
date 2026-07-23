@@ -434,20 +434,24 @@ def free_trial(message):
 @bot.message_handler(func=lambda m: m.text == "کارت به کارت💲")
 def card(message):
 
-    if not require_join(message):
-        return
+bot.reply_to(
 
-    bot.reply_to(
         message,
+
         """
+
 مبلغ را به شماره کارت زیر واریز کنید:
 
-8673 2559 1411 6362
+`6362 1411 2559 8673`
 
 امیر والا شریف نسب
 
 بعد از پرداخت رسید را ارسال کنید. ادمین ما چک میکنه و پول به حساب شما میاد
-"""
+
+""",
+
+        parse_mode="Markdown"
+
     )
 
 
