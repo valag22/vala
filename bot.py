@@ -4,6 +4,8 @@ import requests
 import uuid
 import time
 import os
+import csv
+import io
 
 from telebot.types import (
     InlineKeyboardMarkup,
@@ -80,6 +82,32 @@ def save_config_history(user_id, plan_title, links, price=0):
     conn.commit()
 
 
+# --- ستون مسدودسازی کاربر ---
+try:
+    cursor.execute("ALTER TABLE users ADD COLUMN banned INTEGER DEFAULT 0")
+    conn.commit()
+except sqlite3.OperationalError:
+    pass
+
+# --- زمان عضویت (برای آمار کاربر جدید) ---
+try:
+    cursor.execute("ALTER TABLE users ADD COLUMN joined_at INTEGER")
+    conn.commit()
+except sqlite3.OperationalError:
+    pass
+
+
+def is_banned(user_id):
+    cursor.execute("SELECT banned FROM users WHERE user_id=?", (user_id,))
+    row = cursor.fetchone()
+    return bool(row and row[0])
+
+
+def set_banned(user_id, value):
+    cursor.execute("UPDATE users SET banned=? WHERE user_id=?", (1 if value else 0, user_id))
+    conn.commit()
+
+
 # ================= PLANS =================
 
 PLANS = {
@@ -133,8 +161,16 @@ def send_join_prompt(chat_id):
 
 
 def require_join(message):
-    if is_member(message.from_user.id):
+    """چک ترکیبی: اگه کاربر مسدود باشه یا عضو کانال نباشه، ادامه‌ی کار متوقف میشه."""
+    user_id = message.from_user.id
+
+    if is_banned(user_id):
+        bot.reply_to(message, "⛔️ حساب شما توسط ادمین مسدود شده است. برای پیگیری با پشتیبانی تماس بگیرید.")
+        return False
+
+    if is_member(user_id):
         return True
+
     send_join_prompt(message.chat.id)
     return False
 
@@ -263,6 +299,16 @@ def start(message):
         (message.from_user.id, message.from_user.username)
     )
     conn.commit()
+
+    cursor.execute(
+        "UPDATE users SET joined_at = COALESCE(joined_at, ?), username = ? WHERE user_id = ?",
+        (int(time.time()), message.from_user.username, message.from_user.id)
+    )
+    conn.commit()
+
+    if is_banned(message.from_user.id):
+        bot.reply_to(message, "⛔️ حساب شما توسط ادمین مسدود شده است. برای پیگیری با پشتیبانی تماس بگیرید.")
+        return
 
     bot.reply_to(
         message,
@@ -581,6 +627,15 @@ def receipt(message):
 
     bot.forward_message(ADMIN_ID, message.chat.id, message.message_id)
 
+    uid = message.from_user.id
+    quick_amounts = [60000, 70000, 90000]
+    keyboard = InlineKeyboardMarkup(row_width=3)
+    keyboard.add(*[
+        InlineKeyboardButton(f"{amt:,}", callback_data=f"qcharge_{uid}_{amt}")
+        for amt in quick_amounts
+    ])
+    keyboard.add(InlineKeyboardButton("💬 مبلغ دلخواه", callback_data=f"qcharge_custom_{uid}"))
+
     bot.send_message(
         ADMIN_ID,
         f"""رسید جدید
@@ -589,14 +644,76 @@ def receipt(message):
 {message.from_user.first_name}
 
 آیدی:
-{message.from_user.id}
+{uid}
 
-برای شارژ حساب این کاربر دستور زیر رو بفرست:
-/charge {message.from_user.id} <مبلغ>
-مثال: /charge {message.from_user.id} 60000"""
+برای شارژ سریع یکی از دکمه‌های زیر رو بزنید، یا برای مبلغ دلخواه دستور زیر رو بفرستید:
+/charge {uid} <مبلغ>""",
+        reply_markup=keyboard
     )
 
     bot.reply_to(message, "✅ رسید ارسال شد، پس از تایید ادمین موجودی شما شارژ می‌شود.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("qcharge_"))
+def quick_charge_callback(call):
+    if call.from_user.id != ADMIN_ID:
+        bot.answer_callback_query(call.id, "⛔️ دسترسی ندارید", show_alert=True)
+        return
+
+    parts = call.data.split("_")
+
+    if parts[1] == "custom":
+        target_id = int(parts[2])
+        bot.answer_callback_query(call.id)
+        msg = bot.send_message(call.message.chat.id, f"مبلغ شارژ برای کاربر {target_id} رو وارد کنید:")
+        bot.register_next_step_handler(msg, lambda m: _process_custom_charge(m, target_id))
+        return
+
+    target_id = int(parts[1])
+    amount = int(parts[2])
+
+    cursor.execute("INSERT OR IGNORE INTO users(user_id) VALUES (?)", (target_id,))
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, target_id))
+    conn.commit()
+
+    cursor.execute("SELECT balance FROM users WHERE user_id=?", (target_id,))
+    new_balance = cursor.fetchone()[0]
+
+    bot.answer_callback_query(call.id, "✅ شارژ شد")
+    bot.send_message(
+        call.message.chat.id,
+        f"✅ حساب {target_id} به مبلغ {amount:,} تومان شارژ شد.\nموجودی جدید: {new_balance:,} تومان"
+    )
+
+    try:
+        bot.send_message(target_id, f"✅ حساب شما به مبلغ {amount:,} تومان شارژ شد.\nموجودی جدید: {new_balance:,} تومان")
+    except Exception:
+        pass
+
+
+def _process_custom_charge(message, target_id):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    try:
+        amount = int(message.text.strip())
+    except ValueError:
+        bot.reply_to(message, "مبلغ باید عدد باشه")
+        return
+
+    cursor.execute("INSERT OR IGNORE INTO users(user_id) VALUES (?)", (target_id,))
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, target_id))
+    conn.commit()
+
+    cursor.execute("SELECT balance FROM users WHERE user_id=?", (target_id,))
+    new_balance = cursor.fetchone()[0]
+
+    bot.reply_to(message, f"✅ حساب {target_id} به مبلغ {amount:,} تومان شارژ شد.\nموجودی جدید: {new_balance:,} تومان")
+
+    try:
+        bot.send_message(target_id, f"✅ حساب شما به مبلغ {amount:,} تومان شارژ شد.\nموجودی جدید: {new_balance:,} تومان")
+    except Exception:
+        pass
 
 
 # ================= ADMIN CHARGE COMMAND =================
@@ -718,73 +835,400 @@ def admin_dump_user(message):
         bot.send_message(message.chat.id, f"```\n{dump[i:i+3500]}\n```", parse_mode="Markdown")
 
 
-# ================= ADMIN PANEL (مدیریت) =================
+# ================= ADMIN PANEL پیشرفته (مدیریت) =================
 
-@bot.message_handler(commands=['admin'])
-def admin_panel(message):
+ADMIN_USERS_PER_PAGE = 8
 
-    if message.from_user.id != ADMIN_ID:
-        return
+# نگهداری موقت پیام‌های در انتظار تأیید برای پیام همگانی: {admin_chat_id: (from_chat_id, message_id)}
+_pending_broadcasts = {}
 
+
+def admin_only(func):
+    def wrapper(*args, **kwargs):
+        obj = args[0]
+        uid = obj.from_user.id
+        if uid != ADMIN_ID:
+            if hasattr(obj, "id") and hasattr(obj, "message"):  # callback query
+                bot.answer_callback_query(obj.id, "⛔️ دسترسی ندارید", show_alert=True)
+            return
+        return func(*args, **kwargs)
+    return wrapper
+
+
+def main_admin_keyboard():
     keyboard = InlineKeyboardMarkup(row_width=2)
     keyboard.add(
-        InlineKeyboardButton("📊 آمار", callback_data="admin_stats"),
+        InlineKeyboardButton("📊 آمار پیشرفته", callback_data="admin_stats"),
+        InlineKeyboardButton("👥 مدیریت کاربران", callback_data="admin_users_0"),
+    )
+    keyboard.add(
+        InlineKeyboardButton("🔍 جستجوی کاربر", callback_data="admin_search"),
         InlineKeyboardButton("📢 پیام همگانی", callback_data="admin_broadcast"),
     )
     keyboard.add(
-        InlineKeyboardButton("👥 لیست کاربران برتر", callback_data="admin_userlist"),
-        InlineKeyboardButton("🔍 جستجوی کاربر", callback_data="admin_search"),
+        InlineKeyboardButton("📤 خروجی CSV", callback_data="admin_export"),
     )
+    return keyboard
 
-    bot.send_message(message.chat.id, "🛠 پنل مدیریت بات", reply_markup=keyboard)
+
+@bot.message_handler(commands=['admin'])
+@admin_only
+def admin_panel(message):
+    bot.send_message(message.chat.id, "🛠 پنل مدیریت بات", reply_markup=main_admin_keyboard())
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_"))
-def admin_callbacks(call):
+# --------- آمار پیشرفته ---------
 
-    if call.from_user.id != ADMIN_ID:
-        bot.answer_callback_query(call.id, "⛔️ دسترسی ندارید", show_alert=True)
-        return
+def build_stats_text():
+    now = int(time.time())
+    today_start = now - (now % 86400)
+    week_start = now - 7 * 86400
+    month_start = now - 30 * 86400
 
-    action = call.data
+    cursor.execute("SELECT COUNT(*), COALESCE(SUM(balance),0) FROM users")
+    total_users, total_balance = cursor.fetchone()
+
+    cursor.execute("SELECT COUNT(*) FROM users WHERE trial_used=1")
+    trial_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM users WHERE banned=1")
+    banned_count = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM users WHERE joined_at >= ?", (today_start,))
+    new_today = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM users WHERE joined_at >= ?", (week_start,))
+    new_week = cursor.fetchone()[0]
+
+    def revenue_since(ts):
+        cursor.execute("SELECT COALESCE(SUM(price),0) FROM configs WHERE created_at >= ? AND price > 0", (ts,))
+        return cursor.fetchone()[0]
+
+    rev_today = revenue_since(today_start)
+    rev_week = revenue_since(week_start)
+    rev_month = revenue_since(month_start)
+    cursor.execute("SELECT COALESCE(SUM(price),0) FROM configs WHERE price > 0")
+    rev_total = cursor.fetchone()[0]
+
+    cursor.execute(
+        "SELECT plan_title, COUNT(*), COALESCE(SUM(price),0) FROM configs GROUP BY plan_title ORDER BY COUNT(*) DESC"
+    )
+    plan_rows = cursor.fetchall()
+
+    cursor.execute(
+        """SELECT user_id, COALESCE(SUM(price),0) AS total_spent FROM configs
+           WHERE price > 0 GROUP BY user_id ORDER BY total_spent DESC LIMIT 5"""
+    )
+    top_buyers = cursor.fetchall()
+
+    lines = ["📊 آمار پیشرفته بات\n"]
+    lines.append(f"👥 کل کاربران: {total_users:,}  (جدید امروز: {new_today:,} | جدید این هفته: {new_week:,})")
+    lines.append(f"🚫 مسدود شده: {banned_count:,}")
+    lines.append(f"🧪 استفاده از تست رایگان: {trial_count:,}")
+    lines.append(f"💰 مجموع موجودی کیف پول‌ها: {total_balance:,} تومان\n")
+    lines.append("💵 درآمد:")
+    lines.append(f"  امروز: {rev_today:,} تومان")
+    lines.append(f"  ۷ روز اخیر: {rev_week:,} تومان")
+    lines.append(f"  ۳۰ روز اخیر: {rev_month:,} تومان")
+    lines.append(f"  کل: {rev_total:,} تومان\n")
+
+    if plan_rows:
+        lines.append("📦 تفکیک بر اساس پلن:")
+        for title, count, rev in plan_rows:
+            lines.append(f"  {title}: {count:,} بار — {rev:,} تومان")
+        lines.append("")
+
+    if top_buyers:
+        lines.append("🏆 ۵ کاربر پرخرج برتر:")
+        for uid, spent in top_buyers:
+            lines.append(f"  {uid} — {spent:,} تومان")
+
+    return "\n".join(lines)
+
+
+# --------- مدیریت کاربران (لیست + جزئیات) ---------
+
+def build_users_list(page):
+    cursor.execute("SELECT COUNT(*) FROM users")
+    total = cursor.fetchone()[0]
+
+    offset = page * ADMIN_USERS_PER_PAGE
+    cursor.execute(
+        "SELECT user_id, username, balance, banned FROM users ORDER BY user_id DESC LIMIT ? OFFSET ?",
+        (ADMIN_USERS_PER_PAGE, offset)
+    )
+    rows = cursor.fetchall()
+    return rows, total
+
+
+def users_list_keyboard(rows, page, total):
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    for uid, username, balance, banned in rows:
+        label = f"{'🚫 ' if banned else ''}{uid} — @{username if username else '-'} — {balance:,} ت"
+        keyboard.add(InlineKeyboardButton(label, callback_data=f"admin_user_{uid}"))
+
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ قبلی", callback_data=f"admin_users_{page-1}"))
+    if (page + 1) * ADMIN_USERS_PER_PAGE < total:
+        nav.append(InlineKeyboardButton("بعدی ➡️", callback_data=f"admin_users_{page+1}"))
+    if nav:
+        keyboard.row(*nav)
+
+    keyboard.add(InlineKeyboardButton("🔙 بازگشت به منو", callback_data="admin_back"))
+    return keyboard
+
+
+def build_user_detail(target_id):
+    cursor.execute(
+        "SELECT username, balance, trial_used, banned, joined_at FROM users WHERE user_id=?",
+        (target_id,)
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None, None
+
+    username, balance, trial_used, banned, joined_at = row
+
+    cursor.execute(
+        "SELECT COUNT(*), COALESCE(SUM(price),0) FROM configs WHERE user_id=? AND price>0",
+        (target_id,)
+    )
+    purchase_count, total_spent = cursor.fetchone()
+
+    cursor.execute(
+        "SELECT plan_title, created_at FROM configs WHERE user_id=? ORDER BY created_at DESC LIMIT 3",
+        (target_id,)
+    )
+    recent = cursor.fetchall()
+
+    joined_str = time.strftime("%Y-%m-%d", time.localtime(joined_at)) if joined_at else "-"
+
+    lines = [
+        f"👤 کاربر {target_id}",
+        f"یوزرنیم: @{username if username else '-'}",
+        f"وضعیت: {'🚫 مسدود' if banned else '✅ فعال'}",
+        f"تاریخ عضویت: {joined_str}",
+        f"موجودی: {balance:,} تومان",
+        f"تست رایگان استفاده شده: {'بله' if trial_used else 'خیر'}",
+        f"تعداد خرید: {purchase_count:,} — مجموع: {total_spent:,} تومان",
+    ]
+
+    if recent:
+        lines.append("\nآخرین کانفیگ‌ها:")
+        for plan_title, created_at in recent:
+            date_str = time.strftime("%Y-%m-%d", time.localtime(created_at))
+            lines.append(f"  {plan_title} — {date_str}")
+
+    return "\n".join(lines), banned
+
+
+def user_detail_keyboard(target_id, banned):
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("➕ شارژ", callback_data=f"admin_user_addbal_{target_id}"),
+        InlineKeyboardButton("➖ کسر", callback_data=f"admin_user_subbal_{target_id}"),
+    )
+    if banned:
+        keyboard.add(InlineKeyboardButton("✅ رفع مسدودی", callback_data=f"admin_user_unban_{target_id}"))
+    else:
+        keyboard.add(InlineKeyboardButton("🚫 مسدود کردن", callback_data=f"admin_user_ban_{target_id}"))
+    keyboard.add(InlineKeyboardButton("🔙 بازگشت به لیست", callback_data="admin_users_0"))
+    return keyboard
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_back")
+@admin_only
+def admin_back(call):
+    bot.answer_callback_query(call.id)
+    bot.edit_message_text("🛠 پنل مدیریت بات", call.message.chat.id, call.message.message_id, reply_markup=main_admin_keyboard())
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_stats")
+@admin_only
+def admin_stats_callback(call):
+    bot.answer_callback_query(call.id)
+    keyboard = InlineKeyboardMarkup()
+    keyboard.add(InlineKeyboardButton("🔙 بازگشت به منو", callback_data="admin_back"))
+    bot.edit_message_text(build_stats_text(), call.message.chat.id, call.message.message_id, reply_markup=keyboard)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_users_"))
+@admin_only
+def admin_users_list_callback(call):
+    page = int(call.data.split("_")[-1])
+    rows, total = build_users_list(page)
     bot.answer_callback_query(call.id)
 
-    if action == "admin_stats":
-        cursor.execute("SELECT COUNT(*), COALESCE(SUM(balance),0) FROM users")
-        total_users, total_balance = cursor.fetchone()
-        cursor.execute("SELECT COUNT(*) FROM users WHERE trial_used=1")
-        trial_count = cursor.fetchone()[0]
+    if not rows:
+        bot.edit_message_text("کاربری وجود نداره", call.message.chat.id, call.message.message_id)
+        return
 
-        text = f"""📊 آمار بات
-
-👥 تعداد کل کاربران: {total_users:,}
-🧪 استفاده از تست رایگان: {trial_count:,}
-💰 مجموع موجودی کیف پول‌ها: {total_balance:,} تومان"""
-        bot.send_message(call.message.chat.id, text)
-
-    elif action == "admin_broadcast":
-        msg = bot.send_message(call.message.chat.id, "پیامی که می‌خوای برای همه کاربران ارسال بشه رو بفرست:")
-        bot.register_next_step_handler(msg, process_broadcast)
-
-    elif action == "admin_userlist":
-        cursor.execute("SELECT user_id, balance FROM users ORDER BY balance DESC LIMIT 30")
-        rows = cursor.fetchall()
-        if not rows:
-            bot.send_message(call.message.chat.id, "کاربری وجود نداره")
-            return
-        lines = [f"{uid} — {bal:,} تومان" for uid, bal in rows]
-        bot.send_message(call.message.chat.id, "👥 ۳۰ کاربر برتر (بر اساس موجودی):\n\n" + "\n".join(lines))
-
-    elif action == "admin_search":
-        msg = bot.send_message(call.message.chat.id, "آیدی عددی کاربر مورد نظر رو بفرست:")
-        bot.register_next_step_handler(msg, process_search)
+    text = f"👥 لیست کاربران (صفحه {page+1} از {(total - 1)//ADMIN_USERS_PER_PAGE + 1})\nروی هرکدوم بزنید تا جزئیات و امکانات مدیریتی رو ببینید:"
+    bot.edit_message_text(
+        text, call.message.chat.id, call.message.message_id,
+        reply_markup=users_list_keyboard(rows, page, total)
+    )
 
 
-def process_broadcast(message):
+@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_user_") and call.data.split("_")[2].isdigit())
+@admin_only
+def admin_user_detail_callback(call):
+    target_id = int(call.data.split("_")[2])
+    text, banned = build_user_detail(target_id)
+    bot.answer_callback_query(call.id)
+
+    if text is None:
+        bot.edit_message_text("کاربری با این آیدی پیدا نشد", call.message.chat.id, call.message.message_id)
+        return
+
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=user_detail_keyboard(target_id, banned))
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_user_ban_"))
+@admin_only
+def admin_user_ban_callback(call):
+    target_id = int(call.data.rsplit("_", 1)[1])
+    set_banned(target_id, True)
+    bot.answer_callback_query(call.id, "🚫 کاربر مسدود شد")
+    text, banned = build_user_detail(target_id)
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=user_detail_keyboard(target_id, banned))
+    try:
+        bot.send_message(target_id, "⛔️ حساب شما توسط ادمین مسدود شد.")
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_user_unban_"))
+@admin_only
+def admin_user_unban_callback(call):
+    target_id = int(call.data.rsplit("_", 1)[1])
+    set_banned(target_id, False)
+    bot.answer_callback_query(call.id, "✅ رفع مسدودی شد")
+    text, banned = build_user_detail(target_id)
+    bot.edit_message_text(text, call.message.chat.id, call.message.message_id, reply_markup=user_detail_keyboard(target_id, banned))
+    try:
+        bot.send_message(target_id, "✅ حساب شما رفع مسدودی شد و می‌تونید دوباره از بات استفاده کنید.")
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_user_addbal_"))
+@admin_only
+def admin_user_addbal_callback(call):
+    target_id = int(call.data.rsplit("_", 1)[1])
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, f"مبلغ شارژ برای کاربر {target_id} رو وارد کنید:")
+    bot.register_next_step_handler(msg, lambda m: _process_balance_change(m, target_id, sign=1))
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith("admin_user_subbal_"))
+@admin_only
+def admin_user_subbal_callback(call):
+    target_id = int(call.data.rsplit("_", 1)[1])
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, f"مبلغ کسر از حساب کاربر {target_id} رو وارد کنید:")
+    bot.register_next_step_handler(msg, lambda m: _process_balance_change(m, target_id, sign=-1))
+
+
+def _process_balance_change(message, target_id, sign):
+    if message.from_user.id != ADMIN_ID:
+        return
+    try:
+        amount = int(message.text.strip())
+    except ValueError:
+        bot.reply_to(message, "مبلغ باید عدد باشه")
+        return
+
+    cursor.execute("INSERT OR IGNORE INTO users(user_id) VALUES (?)", (target_id,))
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (sign * amount, target_id))
+    conn.commit()
+
+    cursor.execute("SELECT balance FROM users WHERE user_id=?", (target_id,))
+    new_balance = cursor.fetchone()[0]
+
+    action_word = "شارژ" if sign > 0 else "کسر"
+    bot.reply_to(message, f"✅ {action_word} انجام شد.\nموجودی جدید کاربر {target_id}: {new_balance:,} تومان")
+
+    try:
+        bot.send_message(target_id, f"💰 موجودی حساب شما به‌روزرسانی شد.\nموجودی جدید: {new_balance:,} تومان")
+    except Exception:
+        pass
+
+
+# --------- جستجوی کاربر ---------
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_search")
+@admin_only
+def admin_search_callback(call):
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(call.message.chat.id, "آیدی عددی یا یوزرنیم کاربر مورد نظر رو بفرست:")
+    bot.register_next_step_handler(msg, process_search)
+
+
+def process_search(message):
     if message.from_user.id != ADMIN_ID:
         return
 
-    text = message.text
+    query = message.text.strip()
+
+    if query.isdigit():
+        cursor.execute("SELECT user_id FROM users WHERE user_id=?", (int(query),))
+    else:
+        cursor.execute("SELECT user_id FROM users WHERE username=?", (query.lstrip("@"),))
+
+    row = cursor.fetchone()
+    if not row:
+        bot.reply_to(message, "کاربری با این مشخصات پیدا نشد")
+        return
+
+    target_id = row[0]
+    text, banned = build_user_detail(target_id)
+    bot.send_message(message.chat.id, text, reply_markup=user_detail_keyboard(target_id, banned))
+
+
+# --------- پیام همگانی پیشرفته (با پیش‌نمایش و تأیید) ---------
+
+@bot.callback_query_handler(func=lambda call: call.data == "admin_broadcast")
+@admin_only
+def admin_broadcast_callback(call):
+    bot.answer_callback_query(call.id)
+    msg = bot.send_message(
+        call.message.chat.id,
+        "پیامی که می‌خوای برای همه کاربران ارسال بشه رو بفرست (متن، عکس، فایل و ... همه پشتیبانی میشه):"
+    )
+    bot.register_next_step_handler(msg, process_broadcast_preview)
+
+
+def process_broadcast_preview(message):
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    _pending_broadcasts[message.chat.id] = (message.chat.id, message.message_id)
+
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("✅ ارسال به همه", callback_data="bc_confirm"),
+        InlineKeyboardButton("❌ لغو", callback_data="bc_cancel"),
+    )
+    bot.copy_message(message.chat.id, message.chat.id, message.message_id)
+    bot.send_message(message.chat.id, "☝️ پیش‌نمایش پیام بالا. آیا مطمئنید می‌خواید این پیام برای همه‌ی کاربران ارسال بشه؟", reply_markup=keyboard)
+
+
+@bot.callback_query_handler(func=lambda call: call.data in ("bc_confirm", "bc_cancel"))
+@admin_only
+def broadcast_confirm_callback(call):
+    admin_chat_id = call.message.chat.id
+    pending = _pending_broadcasts.pop(admin_chat_id, None)
+
+    if call.data == "bc_cancel" or pending is None:
+        bot.answer_callback_query(call.id, "لغو شد")
+        bot.edit_message_reply_markup(admin_chat_id, call.message.message_id, reply_markup=None)
+        return
+
+    bot.answer_callback_query(call.id, "در حال ارسال...")
+    bot.edit_message_reply_markup(admin_chat_id, call.message.message_id, reply_markup=None)
+
+    from_chat_id, message_id = pending
     cursor.execute("SELECT user_id FROM users")
     all_ids = [row[0] for row in cursor.fetchall()]
 
@@ -792,45 +1236,44 @@ def process_broadcast(message):
     failed = 0
     for uid in all_ids:
         try:
-            bot.send_message(uid, text)
+            bot.copy_message(uid, from_chat_id, message_id)
             sent += 1
         except Exception:
             failed += 1
         time.sleep(0.05)
 
-    bot.send_message(message.chat.id, f"✅ پیام همگانی ارسال شد.\nموفق: {sent}\nناموفق: {failed}")
+    bot.send_message(admin_chat_id, f"✅ پیام همگانی ارسال شد.\nموفق: {sent:,}\nناموفق: {failed:,}")
 
 
-def process_search(message):
-    if message.from_user.id != ADMIN_ID:
-        return
+# --------- خروجی CSV ---------
 
-    try:
-        target_id = int(message.text.strip())
-    except ValueError:
-        bot.reply_to(message, "آیدی باید عدد باشه")
-        return
+@bot.callback_query_handler(func=lambda call: call.data == "admin_export")
+@admin_only
+def admin_export_callback(call):
+    bot.answer_callback_query(call.id, "در حال ساخت فایل...")
 
-    cursor.execute(
-        "SELECT user_id, username, balance, trial_used, config FROM users WHERE user_id=?",
-        (target_id,)
-    )
-    row = cursor.fetchone()
+    # --- CSV کاربران ---
+    users_buf = io.StringIO()
+    writer = csv.writer(users_buf)
+    writer.writerow(["user_id", "username", "balance", "trial_used", "banned", "joined_at"])
+    cursor.execute("SELECT user_id, username, balance, trial_used, banned, joined_at FROM users")
+    for row in cursor.fetchall():
+        writer.writerow(row)
+    users_bytes = io.BytesIO(users_buf.getvalue().encode("utf-8-sig"))
+    users_bytes.name = "users.csv"
 
-    if not row:
-        bot.reply_to(message, "کاربری با این آیدی پیدا نشد")
-        return
+    # --- CSV تاریخچه‌ی کانفیگ‌ها ---
+    configs_buf = io.StringIO()
+    writer2 = csv.writer(configs_buf)
+    writer2.writerow(["id", "user_id", "plan_title", "price", "created_at", "links"])
+    cursor.execute("SELECT id, user_id, plan_title, price, created_at, links FROM configs")
+    for row in cursor.fetchall():
+        writer2.writerow(row)
+    configs_bytes = io.BytesIO(configs_buf.getvalue().encode("utf-8-sig"))
+    configs_bytes.name = "configs_history.csv"
 
-    uid, username, balance, trial_used, config = row
-    text = f"""👤 اطلاعات کاربر
-
-🆔 آیدی: {uid}
-👤 یوزرنیم: @{username if username else '-'}
-💰 موجودی: {balance:,} تومان
-🧪 تست رایگان استفاده شده: {'بله' if trial_used else 'خیر'}
-🔑 آخرین کانفیگ:
-{config if config else '-'}"""
-    bot.reply_to(message, text)
+    bot.send_document(call.message.chat.id, users_bytes, caption="📤 خروجی کاربران")
+    bot.send_document(call.message.chat.id, configs_bytes, caption="📤 خروجی تاریخچه‌ی کانفیگ‌ها")
 
 
 if __name__ == "__main__":
