@@ -431,6 +431,8 @@ def free_trial(message):
 
 # ================= CARD TO CARD =================
 
+ 
+
 @bot.message_handler(func=lambda m: m.text == "کارت به کارت💲")
 def card(message):
 
@@ -439,14 +441,15 @@ def card(message):
         """
 مبلغ را به شماره کارت زیر واریز کنید:
 
-<code>6362 1411 2559 8673</code>
+<code>8673 2559 1411 6362</code>
 
 امیر والا شریف نسب
 
 بعد از پرداخت رسید را ارسال کنید. ادمین ما چک میکنه و پول به حساب شما میاد
-""",
-        parse_mode="HTML"
+"""
     )
+
+
 
 
 @bot.message_handler(func=lambda message: message.text == "اطلاعات من✨")
