@@ -18,13 +18,13 @@ from telebot.types import (
 # ⚠️ توجه امنیتی: توکن و کلیدها رو فقط از env بخونید، مقدار پیش‌فرض hardcoded نذارید.
 # اگه این کد جایی public شده، همین الان توکن بات و کلیدهای پنل رو عوض کنید.
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "8921489424:AAFCrTyaD6S-Zd2sFav_7-WBH9KQDfB7Cmk")
 
-PANEL_BASE = os.environ.get("PANEL_BASE", "")
+PANEL_BASE = os.environ.get("PANEL_BASE", "https://little-waterfall-27fa.berbrtokamma.workers.dev")
 PANEL_API_ROUTE = os.environ.get("PANEL_API_ROUTE", "sync")
 
-PANEL_API_KEY = os.environ.get("PANEL_API_KEY", "")
-PANEL_MASTER_KEY_FALLBACK = os.environ.get("PANEL_MASTER_KEY", "")
+PANEL_API_KEY = os.environ.get("PANEL_API_KEY", "nahan_mrlmsp7c_7lg9rlf0")
+PANEL_MASTER_KEY_FALLBACK = os.environ.get("PANEL_MASTER_KEY", "vala1392")
 
 PANEL_AUTH_HEADERS = {"Authorization": f"Bearer {PANEL_API_KEY}"}
 
