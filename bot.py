@@ -18,13 +18,13 @@ from telebot.types import (
 # ⚠️ توجه امنیتی: توکن و کلیدها رو فقط از env بخونید، مقدار پیش‌فرض hardcoded نذارید.
 # اگه این کد جایی public شده، همین الان توکن بات و کلیدهای پنل رو عوض کنید.
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN", "8921489424:AAFCrTyaD6S-Zd2sFav_7-WBH9KQDfB7Cmk")
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
-PANEL_BASE = os.environ.get("PANEL_BASE", "https://little-waterfall-27fa.berbrtokamma.workers.dev")
+PANEL_BASE = os.environ.get("PANEL_BASE", "")
 PANEL_API_ROUTE = os.environ.get("PANEL_API_ROUTE", "sync")
 
-PANEL_API_KEY = os.environ.get("PANEL_API_KEY", "nahan_mrlmsp7c_7lg9rlf0")
-PANEL_MASTER_KEY_FALLBACK = os.environ.get("PANEL_MASTER_KEY", "vala1392")
+PANEL_API_KEY = os.environ.get("PANEL_API_KEY", "")
+PANEL_MASTER_KEY_FALLBACK = os.environ.get("PANEL_MASTER_KEY", "")
 
 PANEL_AUTH_HEADERS = {"Authorization": f"Bearer {PANEL_API_KEY}"}
 
@@ -636,13 +636,22 @@ def config_history_page(call):
     )
 
 
-# ================= ADMIN RECEIPT =================
+# ================= ADMIN RECEIPT (تایید / رد با دکمه) =================
+
+_receipt_pending = {}  # admin_id -> {"action": "approve"/"reject", "user_id": int}
+
 
 @bot.message_handler(content_types=['photo'])
 def receipt(message):
 
     if is_admin(message.from_user.id):
         return
+
+    keyboard = InlineKeyboardMarkup(row_width=2)
+    keyboard.add(
+        InlineKeyboardButton("✅ تایید و شارژ", callback_data=f"approve_{message.from_user.id}"),
+        InlineKeyboardButton("❌ رد رسید", callback_data=f"reject_{message.from_user.id}"),
+    )
 
     for admin_id in ADMIN_IDS:
         try:
@@ -657,9 +666,8 @@ def receipt(message):
 آیدی:
 {message.from_user.id}
 
-برای شارژ حساب این کاربر دستور زیر رو بفرست:
-/charge {message.from_user.id} <مبلغ>
-مثال: /charge {message.from_user.id} 60000"""
+با دکمه‌های زیر رسید رو تایید یا رد کن:""",
+                reply_markup=keyboard
             )
         except Exception:
             pass
@@ -667,7 +675,98 @@ def receipt(message):
     bot.reply_to(message, "✅ رسید ارسال شد، پس از تایید ادمین موجودی شما شارژ می‌شود.")
 
 
-# ================= ADMIN CHARGE COMMAND =================
+@bot.callback_query_handler(func=lambda call: call.data.startswith("approve_") or call.data.startswith("reject_"))
+def receipt_action_callback(call):
+    if not is_admin(call.from_user.id):
+        bot.answer_callback_query(call.id, "⛔️ دسترسی ندارید", show_alert=True)
+        return
+
+    action, target_user_id = call.data.split("_", 1)
+    target_user_id = int(target_user_id)
+
+    bot.answer_callback_query(call.id)
+
+    # غیرفعال کردن دکمه‌ها تا از اقدام تکراری روی همین رسید جلوگیری بشه
+    try:
+        bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=None)
+    except Exception:
+        pass
+
+    _receipt_pending[call.from_user.id] = {"action": action, "user_id": target_user_id}
+
+    if action == "approve":
+        msg = bot.send_message(
+            call.message.chat.id,
+            f"مبلغی که می‌خوای حساب کاربر {target_user_id} باهاش شارژ بشه رو بفرست (فقط عدد):"
+        )
+        bot.register_next_step_handler(msg, process_receipt_amount)
+    else:
+        msg = bot.send_message(
+            call.message.chat.id,
+            f"دلیل رد رسید کاربر {target_user_id} رو بنویس (یا فقط - بفرست برای رد بدون دلیل):"
+        )
+        bot.register_next_step_handler(msg, process_receipt_reject)
+
+
+def process_receipt_amount(message):
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        return
+
+    pending = _receipt_pending.pop(admin_id, None)
+    if pending is None or pending["action"] != "approve":
+        bot.reply_to(message, "❌ درخواستی برای تایید پیدا نشد.")
+        return
+
+    target_user_id = pending["user_id"]
+
+    try:
+        amount = int(message.text.strip())
+    except ValueError:
+        bot.reply_to(message, "❌ مبلغ باید عدد باشه. دوباره از منوی رسید اقدام کن.")
+        return
+
+    cursor.execute("INSERT OR IGNORE INTO users(user_id) VALUES (?)", (target_user_id,))
+    cursor.execute("UPDATE users SET balance = balance + ? WHERE user_id = ?", (amount, target_user_id))
+    conn.commit()
+
+    cursor.execute("SELECT balance FROM users WHERE user_id=?", (target_user_id,))
+    new_balance = cursor.fetchone()[0]
+
+    bot.reply_to(message, f"✅ حساب {target_user_id} به مبلغ {amount:,} تومان شارژ شد.\nموجودی جدید: {new_balance:,} تومان")
+
+    try:
+        bot.send_message(target_user_id, f"✅ رسید شما تایید و حساب‌تان به مبلغ {amount:,} تومان شارژ شد.\nموجودی جدید: {new_balance:,} تومان")
+    except Exception:
+        pass
+
+
+def process_receipt_reject(message):
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        return
+
+    pending = _receipt_pending.pop(admin_id, None)
+    if pending is None or pending["action"] != "reject":
+        bot.reply_to(message, "❌ درخواستی برای رد پیدا نشد.")
+        return
+
+    target_user_id = pending["user_id"]
+    reason = message.text.strip()
+
+    if reason == "-" or not reason:
+        user_text = "❌ رسید شما رد شد.\nلطفاً رسید معتبر و واضح ارسال کنید یا با پشتیبانی تماس بگیرید."
+    else:
+        user_text = f"❌ رسید شما رد شد.\n\nدلیل:\n{reason}\n\nدر صورت اعتراض با پشتیبانی تماس بگیرید."
+
+    try:
+        bot.send_message(target_user_id, user_text)
+        bot.reply_to(message, f"✅ پیام رد رسید برای کاربر {target_user_id} ارسال شد.")
+    except Exception as e:
+        bot.reply_to(message, f"⚠️ پیام رد رسید ارسال نشد: {e}")
+
+
+# ================= ADMIN CHARGE COMMAND (دستی، بدون دکمه) =================
 
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("/charge") and is_admin(m.from_user.id))
 def admin_charge(message):
