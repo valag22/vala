@@ -125,9 +125,9 @@ def block_if_banned(message):
 # ================= PLANS =================
 
 PLANS = {
-    "single": {"title": "یک کاربره", "price": 60000, "profiles": 1, "days": 30, "conn_limit": 1},
-    "double": {"title": "دو کاربره", "price": 70000, "profiles": 1, "days": 30, "conn_limit": 2},
-    "unlimited": {"title": "نامحدود", "price": 90000, "profiles": 1, "days": 30, "conn_limit": None},
+    "single": {"title": "یک کاربره", "price": 50000, "profiles": 1, "days": 30, "conn_limit": 1},
+    "double": {"title": "دو کاربره", "price": 60000, "profiles": 1, "days": 30, "conn_limit": 2},
+    "unlimited": {"title": "نامحدود", "price": 70000, "profiles": 1, "days": 30, "conn_limit": None},
 }
 
 # ================= TRIAL =================
