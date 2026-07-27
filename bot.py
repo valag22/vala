@@ -20,7 +20,7 @@ from telebot.types import (
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8921489424:AAFCrTyaD6S-Zd2sFav_7-WBH9KQDfB7Cmk")
 
-PANEL_BASE = os.environ.get("PANEL_BASE", "https://odd-hill-595b.valasharif92.workers.dev/")
+PANEL_BASE = os.environ.get("PANEL_BASE", "https://odd-hill-595b.valasharif92.workers.dev")
 PANEL_API_ROUTE = os.environ.get("PANEL_API_ROUTE", "sync")
 
 PANEL_API_KEY = os.environ.get("PANEL_API_KEY", "nahan_ms3nempd_itecble0")
