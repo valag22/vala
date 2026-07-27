@@ -33,7 +33,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "8921489424:AAFCrTyaD6S-Zd2sFav_7-WBH9KQ
 PANEL_BASE = require_env("https://odd-hill-595b.valasharif92.workers.dev")
 PANEL_API_ROUTE = os.environ.get("PANEL_API_ROUTE", "sync")
 PANEL_API_KEY = require_env("nahan_ms3apy0d_8cg7bs6g")
-PANEL_MASTER_KEY_FALLBACK = os.environ.get("PANEL_MASTER_KEY", "vala1392")
+PANEL_MASTER_KEY_FALLBACK = os.environ.get("PANEL_MASTER_KEY", "vala92")
 
 # --- پنل ۲ (پلن نامحدود) ---
 PANEL2_BASE = require_env("https://proud-morning-9018.vsdad.workers.dev")
