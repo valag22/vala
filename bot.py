@@ -20,19 +20,13 @@ from telebot.types import (
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8921489424:AAFCrTyaD6S-Zd2sFav_7-WBH9KQDfB7Cmk")
 
-PANEL_BASE = os.environ.get("PANEL_BASE", "https://proud-morning-9018.vsdad.workers.dev/")
+PANEL_BASE = os.environ.get("PANEL_BASE", "https://little-waterfall-27fa.berbrtokamma.workers.dev")
 PANEL_API_ROUTE = os.environ.get("PANEL_API_ROUTE", "sync")
-PANEL_API_KEY = os.environ.get("PANEL_API_KEY", "nahan_ms3mwj4k_1cfeqcep")
+
+PANEL_API_KEY = os.environ.get("PANEL_API_KEY", "nahan_mrlmsp7c_7lg9rlf0")
 PANEL_MASTER_KEY_FALLBACK = os.environ.get("PANEL_MASTER_KEY", "vala92")
 
 PANEL_AUTH_HEADERS = {"Authorization": f"Bearer {PANEL_API_KEY}"}
-
-# ---- پنل دوم (برای کانفیگ‌های خرید/نامحدود) ----
-# مقادیر زیر رو با اطلاعات پنل دومت پر کن (یا با env var ست کن)
-PANEL_BASE_2 = os.environ.get("PANEL_BASE_2", "https://odd-hill-595b.valasharif92.workers.dev/")
-PANEL_API_ROUTE_2 = os.environ.get("PANEL_API_ROUTE_2", "sync")
-PANEL_API_KEY_2 = os.environ.get("PANEL_API_KEY_2", "nahan_ms3nempd_itecble0")
-PANEL_MASTER_KEY_2_FALLBACK = os.environ.get("PANEL_MASTER_KEY_2", "vala92")
 
 # چند ادمین: با کاما جدا کن، مثال: "6059940165,111111111"
 ADMIN_ID = 6059940165  # ادمین اصلی (برای سازگاری با کد قبلی)
@@ -206,18 +200,13 @@ class PanelError(Exception):
     pass
 
 
-def panel_auth(base=None, route=None, api_key=None, master_key=None):
-    base = base or PANEL_BASE
-    route = route or PANEL_API_ROUTE
-    api_key = api_key if api_key is not None else PANEL_API_KEY
-    master_key = master_key if master_key is not None else PANEL_MASTER_KEY_FALLBACK
-
-    url = f"{base}/{route}/api/auth"
+def panel_auth():
+    url = f"{PANEL_BASE}/{PANEL_API_ROUTE}/api/auth"
 
     attempts = []
-    keys_to_try = [("Panel API Key", api_key)]
-    if master_key:
-        keys_to_try.append(("Master Key", master_key))
+    keys_to_try = [("Panel API Key", PANEL_API_KEY)]
+    if PANEL_MASTER_KEY_FALLBACK:
+        keys_to_try.append(("Master Key", PANEL_MASTER_KEY_FALLBACK))
 
     for label, key in keys_to_try:
         try:
@@ -250,11 +239,8 @@ def panel_auth(base=None, route=None, api_key=None, master_key=None):
     )
 
 
-def panel_sync(config, key, base=None, route=None):
-    base = base or PANEL_BASE
-    route = route or PANEL_API_ROUTE
-
-    url = f"{base}/{route}/api/sync"
+def panel_sync(config, key):
+    url = f"{PANEL_BASE}/{PANEL_API_ROUTE}/api/sync"
     resp = requests.post(
         url,
         headers={"Authorization": f"Bearer {key}"},
@@ -268,20 +254,11 @@ def panel_sync(config, key, base=None, route=None):
     data = resp.json()
     if not data.get("success"):
         raise PanelError(f"ذخیره کانفیگ روی پنل ناموفق بود - {resp.text[:200]}")
-    return data.get("newRoute", config.get("apiRoute", route))
+    return data.get("newRoute", config.get("apiRoute", PANEL_API_ROUTE))
 
 
-def panel_create_profiles(name_prefix, count, days, traffic_gb=None, conn_limit=None, panel=1):
-    """
-    panel=1 -> پنل اول (PANEL_BASE / PANEL_API_KEY ...) - معمولاً برای تست رایگان
-    panel=2 -> پنل دوم (PANEL_BASE_2 / PANEL_API_KEY_2 ...) - معمولاً برای پلن‌های خرید
-    """
-    if panel == 2:
-        base, route, api_key, master_key = PANEL_BASE_2, PANEL_API_ROUTE_2, PANEL_API_KEY_2, PANEL_MASTER_KEY_2_FALLBACK
-    else:
-        base, route, api_key, master_key = PANEL_BASE, PANEL_API_ROUTE, PANEL_API_KEY, PANEL_MASTER_KEY_FALLBACK
-
-    config, working_key = panel_auth(base=base, route=route, api_key=api_key, master_key=master_key)
+def panel_create_profiles(name_prefix, count, days, traffic_gb=None, conn_limit=None):
+    config, working_key = panel_auth()
 
     if config.get("users") is None:
         config["users"] = []
@@ -309,44 +286,26 @@ def panel_create_profiles(name_prefix, count, days, traffic_gb=None, conn_limit=
         config["users"].append(user_obj)
         new_names.append(name)
 
-    new_route = panel_sync(config, working_key, base=base, route=route)
+    new_route = panel_sync(config, working_key)
 
     links = []
     for name in new_names:
-        links.append(f"{base}/{new_route}?sub={name}")
+        links.append(f"{PANEL_BASE}/{new_route}?sub={name}")
 
     return links
 
 
 def panel_delete_profile(name):
-    """
-    یک کاربر رو با نام دقیقش حذف می‌کنه. چون الان دو تا پنل داریم و معلوم نیست
-    کانفیگ روی کدوم پنل ساخته شده، اول پنل ۱ رو چک می‌کنه، اگه پیدا نشد پنل ۲ رو.
-    """
-    panels = [
-        (1, PANEL_BASE, PANEL_API_ROUTE, PANEL_API_KEY, PANEL_MASTER_KEY_FALLBACK),
-        (2, PANEL_BASE_2, PANEL_API_ROUTE_2, PANEL_API_KEY_2, PANEL_MASTER_KEY_2_FALLBACK),
-    ]
+    """یک کاربر رو با نام دقیقش از روی پنل حذف می‌کنه."""
+    config, key = panel_auth()
+    users = config.get("users") or []
+    new_users = [u for u in users if u.get("name") != name]
 
-    last_error = None
-    for _, base, route, api_key, master_key in panels:
-        try:
-            config, key = panel_auth(base=base, route=route, api_key=api_key, master_key=master_key)
-        except Exception as e:
-            last_error = e
-            continue
+    if len(new_users) == len(users):
+        raise PanelError("کاربری با این نام روی پنل پیدا نشد.")
 
-        users = config.get("users") or []
-        new_users = [u for u in users if u.get("name") != name]
-
-        if len(new_users) != len(users):
-            config["users"] = new_users
-            panel_sync(config, key, base=base, route=route)
-            return
-
-    if last_error:
-        raise PanelError(f"کاربری با این نام روی هیچکدوم از پنل‌ها پیدا نشد (یا خطا در اتصال: {last_error})")
-    raise PanelError("کاربری با این نام روی هیچکدوم از پنل‌ها پیدا نشد.")
+    config["users"] = new_users
+    panel_sync(config, key)
 
 
 # ================= START =================
@@ -447,8 +406,7 @@ def buy_config(call):
             name_prefix=name_prefix,
             count=plan["profiles"],
             days=plan["days"],
-            conn_limit=plan["conn_limit"],
-            panel=2  # همه‌ی پلن‌های خرید (حجم نامحدود) از پنل دوم
+            conn_limit=plan["conn_limit"]
         )
     except Exception as e:
         bot.edit_message_text(
@@ -517,8 +475,7 @@ def free_trial(message):
             name_prefix=name_prefix,
             count=1,
             days=TRIAL_DAYS,
-            traffic_gb=TRIAL_TRAFFIC_GB,
-            panel=1  # کانفیگ تست همیشه از پنل اول
+            traffic_gb=TRIAL_TRAFFIC_GB
         )
     except Exception as e:
         bot.edit_message_text(
