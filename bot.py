@@ -38,8 +38,8 @@ PANEL_MASTER_KEY_FALLBACK = os.environ.get("PANEL_MASTER_KEY", "vala92")
 # --- پنل ۲ (پلن نامحدود) ---
 PANEL2_BASE = require_env("https://proud-morning-9018.vsdad.workers.dev")
 PANEL2_API_ROUTE = os.environ.get("PANEL2_API_ROUTE", "sync")
-PANEL2_API_KEY = require_env("nahan_ms3mcim6_5bkwoqfh")
-PANEL2_MASTER_KEY_FALLBACK = os.environ.get("PANEL2_MASTER_KEY", "vala1392")
+PANEL2_API_KEY = require_env("nahan_ms3mwj4k_1cfeqcep")
+PANEL2_MASTER_KEY_FALLBACK = os.environ.get("PANEL2_MASTER_KEY", "vala92")
 
 # چند ادمین: با کاما جدا کن، مثال: "6059940165,111111111"
 ADMIN_ID = int(require_env("ADMIN_ID"))
