@@ -6,6 +6,7 @@ import time
 import os
 import csv
 import io
+import sys
 
 from telebot.types import (
     InlineKeyboardMarkup,
@@ -15,21 +16,33 @@ from telebot.types import (
 
 
 # ================= CONFIG =================
-# ⚠️ توجه امنیتی: توکن و کلیدها رو فقط از env بخونید، مقدار پیش‌فرض hardcoded نذارید.
-# اگه این کد جایی public شده، همین الان توکن بات و کلیدهای پنل رو عوض کنید.
+# ⚠️ توجه امنیتی: توکن و کلیدها فقط از env خونده می‌شن، هیچ مقدار پیش‌فرض
+# hardcoded توی کد نیست. اگه env ست نشده باشه، بات بالا نمیاد.
+
+def require_env(name):
+    val = os.environ.get(name, "").strip()
+    if not val:
+        print(f"❌ متغیر محیطی {name} تنظیم نشده. لطفاً قبل از اجرا این مقدار رو ست کن.")
+        sys.exit(1)
+    return val
+
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "8921489424:AAFCrTyaD6S-Zd2sFav_7-WBH9KQDfB7Cmk")
 
-PANEL_BASE = os.environ.get("PANEL_BASE", "https://odd-hill-595b.valasharif92.workers.dev")
+# --- پنل ۱ (تست رایگان + پلن‌های عادی) ---
+PANEL_BASE = require_env("https://odd-hill-595b.valasharif92.workers.dev")
 PANEL_API_ROUTE = os.environ.get("PANEL_API_ROUTE", "sync")
-
-PANEL_API_KEY = os.environ.get("PANEL_API_KEY", "nahan_ms3apy0d_8cg7bs6g")
+PANEL_API_KEY = require_env("nahan_ms3apy0d_8cg7bs6g")
 PANEL_MASTER_KEY_FALLBACK = os.environ.get("PANEL_MASTER_KEY", "vala1392")
 
-PANEL_AUTH_HEADERS = {"Authorization": f"Bearer {PANEL_API_KEY}"}
+# --- پنل ۲ (پلن نامحدود) ---
+PANEL2_BASE = require_env("https://proud-morning-9018.vsdad.workers.dev")
+PANEL2_API_ROUTE = os.environ.get("PANEL2_API_ROUTE", "sync")
+PANEL2_API_KEY = require_env("nahan_ms3mcim6_5bkwoqfh")
+PANEL2_MASTER_KEY_FALLBACK = os.environ.get("PANEL2_MASTER_KEY", "vala1392")
 
 # چند ادمین: با کاما جدا کن، مثال: "6059940165,111111111"
-ADMIN_ID = 6059940165  # ادمین اصلی (برای سازگاری با کد قبلی)
+ADMIN_ID = int(require_env("ADMIN_ID"))
 ADMIN_IDS = set()
 for _piece in os.environ.get("ADMIN_IDS", str(ADMIN_ID)).split(","):
     _piece = _piece.strip()
@@ -84,17 +97,27 @@ CREATE TABLE IF NOT EXISTS configs (
     plan_title TEXT,
     links TEXT,
     price INTEGER DEFAULT 0,
-    created_at INTEGER
+    created_at INTEGER,
+    panel_label TEXT
 )
 """)
 conn.commit()
 
+for _ddl in [
+    "ALTER TABLE configs ADD COLUMN panel_label TEXT",
+]:
+    try:
+        cursor.execute(_ddl)
+        conn.commit()
+    except sqlite3.OperationalError:
+        pass
 
-def save_config_history(user_id, plan_title, links, price=0):
+
+def save_config_history(user_id, plan_title, links, price=0, panel_label=""):
     """هر بار که کانفیگی (خرید یا تست) ساخته میشه، یه رکورد توی تاریخچه ذخیره میشه."""
     cursor.execute(
-        "INSERT INTO configs (user_id, plan_title, links, price, created_at) VALUES (?,?,?,?,?)",
-        (user_id, plan_title, links, price, int(time.time()))
+        "INSERT INTO configs (user_id, plan_title, links, price, created_at, panel_label) VALUES (?,?,?,?,?,?)",
+        (user_id, plan_title, links, price, int(time.time()), panel_label)
     )
     conn.commit()
 
@@ -123,6 +146,7 @@ def block_if_banned(message):
 
 
 # ================= PLANS =================
+# نکته: پلن "unlimited" روی پنل ۲ ساخته می‌شه، بقیه پلن‌ها و تست رایگان روی پنل ۱.
 
 PLANS = {
     "single": {"title": "یک کاربره", "price": 50000, "profiles": 1, "days": 30, "conn_limit": 1},
@@ -194,19 +218,19 @@ def check_join_callback(call):
         bot.answer_callback_query(call.id, "❌ هنوز عضو کانال نشدید", show_alert=True)
 
 
-# ================= PANEL API =================
+# ================= PANEL API (پارامتریک - چند پنل) =================
 
 class PanelError(Exception):
     pass
 
 
-def panel_auth():
-    url = f"{PANEL_BASE}/{PANEL_API_ROUTE}/api/auth"
+def panel_auth(base_url, api_route, api_key, master_key_fallback=""):
+    url = f"{base_url}/{api_route}/api/auth"
 
     attempts = []
-    keys_to_try = [("Panel API Key", PANEL_API_KEY)]
-    if PANEL_MASTER_KEY_FALLBACK:
-        keys_to_try.append(("Master Key", PANEL_MASTER_KEY_FALLBACK))
+    keys_to_try = [("Panel API Key", api_key)]
+    if master_key_fallback:
+        keys_to_try.append(("Master Key", master_key_fallback))
 
     for label, key in keys_to_try:
         try:
@@ -239,8 +263,8 @@ def panel_auth():
     )
 
 
-def panel_sync(config, key):
-    url = f"{PANEL_BASE}/{PANEL_API_ROUTE}/api/sync"
+def panel_sync(base_url, api_route, config, key):
+    url = f"{base_url}/{api_route}/api/sync"
     resp = requests.post(
         url,
         headers={"Authorization": f"Bearer {key}"},
@@ -254,11 +278,12 @@ def panel_sync(config, key):
     data = resp.json()
     if not data.get("success"):
         raise PanelError(f"ذخیره کانفیگ روی پنل ناموفق بود - {resp.text[:200]}")
-    return data.get("newRoute", config.get("apiRoute", PANEL_API_ROUTE))
+    return data.get("newRoute", config.get("apiRoute", api_route))
 
 
-def panel_create_profiles(name_prefix, count, days, traffic_gb=None, conn_limit=None):
-    config, working_key = panel_auth()
+def panel_create_profiles(base_url, api_route, api_key, master_key_fallback,
+                           name_prefix, count, days, traffic_gb=None, conn_limit=None):
+    config, working_key = panel_auth(base_url, api_route, api_key, master_key_fallback)
 
     if config.get("users") is None:
         config["users"] = []
@@ -286,26 +311,72 @@ def panel_create_profiles(name_prefix, count, days, traffic_gb=None, conn_limit=
         config["users"].append(user_obj)
         new_names.append(name)
 
-    new_route = panel_sync(config, working_key)
+    new_route = panel_sync(base_url, api_route, config, working_key)
 
     links = []
     for name in new_names:
-        links.append(f"{PANEL_BASE}/{new_route}?sub={name}")
+        links.append(f"{base_url}/{new_route}?sub={name}")
 
     return links
 
 
-def panel_delete_profile(name):
-    """یک کاربر رو با نام دقیقش از روی پنل حذف می‌کنه."""
-    config, key = panel_auth()
+def panel_delete_profile(base_url, api_route, api_key, master_key_fallback, name):
+    """یک کاربر رو با نام دقیقش از روی یک پنل مشخص حذف می‌کنه."""
+    config, key = panel_auth(base_url, api_route, api_key, master_key_fallback)
     users = config.get("users") or []
     new_users = [u for u in users if u.get("name") != name]
 
     if len(new_users) == len(users):
-        raise PanelError("کاربری با این نام روی پنل پیدا نشد.")
+        raise PanelError("کاربری با این نام روی این پنل پیدا نشد.")
 
     config["users"] = new_users
-    panel_sync(config, key)
+    panel_sync(base_url, api_route, config, key)
+
+
+# --- تعریف پنل‌ها با یک برچسب مشخص، برای انتخاب راحت‌تر ---
+
+PANEL_1 = {
+    "label": "پنل ۱ (اصلی/تست)",
+    "base_url": PANEL_BASE,
+    "api_route": PANEL_API_ROUTE,
+    "api_key": PANEL_API_KEY,
+    "master_key": PANEL_MASTER_KEY_FALLBACK,
+}
+
+PANEL_2 = {
+    "label": "پنل ۲ (نامحدود)",
+    "base_url": PANEL2_BASE,
+    "api_route": PANEL2_API_ROUTE,
+    "api_key": PANEL2_API_KEY,
+    "master_key": PANEL2_MASTER_KEY_FALLBACK,
+}
+
+
+def panel_for_plan(plan_key):
+    """پلن unlimited از پنل ۲ ساخته می‌شه، بقیه پلن‌ها از پنل ۱."""
+    if plan_key == "unlimited":
+        return PANEL_2
+    return PANEL_1
+
+
+def create_profiles_on(panel, **kwargs):
+    return panel_create_profiles(
+        base_url=panel["base_url"],
+        api_route=panel["api_route"],
+        api_key=panel["api_key"],
+        master_key_fallback=panel["master_key"],
+        **kwargs
+    )
+
+
+def delete_profile_on(panel, name):
+    panel_delete_profile(
+        base_url=panel["base_url"],
+        api_route=panel["api_route"],
+        api_key=panel["api_key"],
+        master_key_fallback=panel["master_key"],
+        name=name,
+    )
 
 
 # ================= START =================
@@ -400,9 +471,12 @@ def buy_config(call):
 
     processing_msg = bot.reply_to(call.message, "⏳ در حال ساخت کانفیگ...")
 
+    panel = panel_for_plan(plan_key)
+
     try:
         name_prefix = f"u{user_id}_{int(time.time())}"
-        links = panel_create_profiles(
+        links = create_profiles_on(
+            panel,
             name_prefix=name_prefix,
             count=plan["profiles"],
             days=plan["days"],
@@ -424,8 +498,8 @@ def buy_config(call):
     cursor.execute("UPDATE users SET config = ? WHERE user_id = ?", (config_text, user_id))
     conn.commit()
 
-    # ذخیره در تاریخچه
-    save_config_history(user_id, plan["title"], config_text, price)
+    # ذخیره در تاریخچه (همراه با اینکه از کدوم پنل ساخته شده)
+    save_config_history(user_id, plan["title"], config_text, price, panel_label=panel["label"])
 
     bot.edit_message_text(
         f"""✅ خرید موفق بود
@@ -443,6 +517,7 @@ def buy_config(call):
 
 
 # ================= FREE TRIAL =================
+# تست رایگان همیشه از پنل ۱ ساخته می‌شه.
 
 @bot.message_handler(func=lambda m: m.text == "تست رایگان🕧")
 def free_trial(message):
@@ -471,7 +546,8 @@ def free_trial(message):
 
     try:
         name_prefix = f"trial_{user_id}_{int(time.time())}"
-        links = panel_create_profiles(
+        links = create_profiles_on(
+            PANEL_1,
             name_prefix=name_prefix,
             count=1,
             days=TRIAL_DAYS,
@@ -491,7 +567,7 @@ def free_trial(message):
     config_text = "\n".join(links)
 
     # ذخیره در تاریخچه
-    save_config_history(user_id, "تست رایگان", config_text, 0)
+    save_config_history(user_id, "تست رایگان", config_text, 0, panel_label=PANEL_1["label"])
 
     bot.edit_message_text(
         f"""✅ کانفیگ تست شما ساخته شد
@@ -567,7 +643,7 @@ def build_history_page(user_id, page):
 
     offset = page * CONFIGS_PER_PAGE
     cursor.execute(
-        """SELECT plan_title, links, price, created_at
+        """SELECT plan_title, links, price, created_at, panel_label
            FROM configs WHERE user_id=?
            ORDER BY created_at DESC
            LIMIT ? OFFSET ?""",
@@ -579,13 +655,14 @@ def build_history_page(user_id, page):
         return "شما تا الان هیچ کانفیگی دریافت نکردید.", total
 
     lines = [f"📜 کانفیگ‌های شما (صفحه {page+1}):\n"]
-    for plan_title, links, price, created_at in rows:
+    for plan_title, links, price, created_at, panel_label in rows:
         date_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(created_at))
         price_str = f"{price:,} تومان" if price else "رایگان"
+        panel_str = f"\n🖥 پنل: {panel_label}" if panel_label else ""
         lines.append(
             f"🔹 پلن: {plan_title}\n"
             f"🗓 تاریخ: {date_str}\n"
-            f"💰 مبلغ: {price_str}\n"
+            f"💰 مبلغ: {price_str}{panel_str}\n"
             f"🔑 لینک:\n{links}\n"
         )
 
@@ -800,55 +877,57 @@ def admin_charge(message):
 
 # ================= ADMIN PANEL DIAGNOSTIC =================
 
+def _panel_test_cases(panel):
+    cases = [
+        (f"{panel['label']} - API Key - فقط هدر", panel["api_key"], True, False),
+        (f"{panel['label']} - API Key - فقط بدنه", panel["api_key"], False, True),
+        (f"{panel['label']} - API Key - هر دو", panel["api_key"], True, True),
+    ]
+    if panel["master_key"]:
+        cases += [
+            (f"{panel['label']} - Master Key - فقط هدر", panel["master_key"], True, False),
+            (f"{panel['label']} - Master Key - فقط بدنه", panel["master_key"], False, True),
+            (f"{panel['label']} - Master Key - هر دو", panel["master_key"], True, True),
+        ]
+    return cases
+
+
 @bot.message_handler(func=lambda m: m.text and m.text.startswith("/testpanel") and is_admin(m.from_user.id))
 def admin_test_panel(message):
 
-    bot.reply_to(message, "⏳ در حال تست اتصال به پنل...")
+    bot.reply_to(message, "⏳ در حال تست اتصال به هر دو پنل...")
 
-    url = f"{PANEL_BASE}/{PANEL_API_ROUTE}/api/auth"
+    for panel in (PANEL_1, PANEL_2):
+        url = f"{panel['base_url']}/{panel['api_route']}/api/auth"
+        report_lines = [f"🔍 نتیجه تست اتصال به {panel['label']}\nURL: {url}\n"]
 
-    test_cases = [
-        ("Panel API Key - فقط هدر", PANEL_API_KEY, True, False),
-        ("Panel API Key - فقط بدنه", PANEL_API_KEY, False, True),
-        ("Panel API Key - هر دو", PANEL_API_KEY, True, True),
-    ]
+        for label, key, use_header, use_body in _panel_test_cases(panel):
+            headers = {}
+            body = {}
+            if use_header:
+                headers["Authorization"] = f"Bearer {key}"
+            if use_body:
+                body["key"] = key
 
-    if PANEL_MASTER_KEY_FALLBACK:
-        test_cases += [
-            ("Master Key - فقط هدر", PANEL_MASTER_KEY_FALLBACK, True, False),
-            ("Master Key - فقط بدنه", PANEL_MASTER_KEY_FALLBACK, False, True),
-            ("Master Key - هر دو", PANEL_MASTER_KEY_FALLBACK, True, True),
-        ]
+            try:
+                resp = requests.post(url, headers=headers, json=body, timeout=15)
+                status = resp.status_code
+                snippet = resp.text[:200].replace("\n", " ")
+                if status == 200:
+                    try:
+                        data = resp.json()
+                        mark = "✅" if data.get("success", False) else "⚠️"
+                    except Exception:
+                        mark = "⚠️"
+                else:
+                    mark = "❌"
+                report_lines.append(f"{mark} {label}\nStatus: {status}\nPasokh: {snippet}\n")
+            except Exception as e:
+                report_lines.append(f"❌ {label}\nError: {e}\n")
 
-    report_lines = [f"🔍 نتیجه تست اتصال به پنل\nURL: {url}\n"]
-
-    for label, key, use_header, use_body in test_cases:
-        headers = {}
-        body = {}
-        if use_header:
-            headers["Authorization"] = f"Bearer {key}"
-        if use_body:
-            body["key"] = key
-
-        try:
-            resp = requests.post(url, headers=headers, json=body, timeout=15)
-            status = resp.status_code
-            snippet = resp.text[:200].replace("\n", " ")
-            if status == 200:
-                try:
-                    data = resp.json()
-                    mark = "✅" if data.get("success", False) else "⚠️"
-                except Exception:
-                    mark = "⚠️"
-            else:
-                mark = "❌"
-            report_lines.append(f"{mark} {label}\nStatus: {status}\nPasokh: {snippet}\n")
-        except Exception as e:
-            report_lines.append(f"❌ {label}\nError: {e}\n")
-
-    full_report = "\n".join(report_lines)
-    for i in range(0, len(full_report), 3500):
-        bot.send_message(message.chat.id, full_report[i:i+3500])
+        full_report = "\n".join(report_lines)
+        for i in range(0, len(full_report), 3500):
+            bot.send_message(message.chat.id, full_report[i:i+3500])
 
 
 # ================= ADMIN: DUMP USER JSON =================
@@ -862,27 +941,28 @@ def admin_dump_user(message):
         return
 
     target_name = parts[1].strip()
-    bot.reply_to(message, "⏳ در حال گرفتن اطلاعات از پنل...")
-
-    try:
-        config, _ = panel_auth()
-    except Exception as e:
-        bot.reply_to(message, f"❌ خطا در اتصال به پنل: {e}")
-        return
-
-    users = config.get("users") or []
-    matches = [u for u in users if u.get("name") == target_name]
-
-    if not matches:
-        names = ", ".join([str(u.get("name")) for u in users][:30])
-        bot.reply_to(message, f"❌ کاربری با اسم '{target_name}' پیدا نشد.\n\nاسم‌های موجود (حداکثر ۳۰ تا):\n{names}")
-        return
+    bot.reply_to(message, "⏳ در حال گرفتن اطلاعات از پنل‌ها...")
 
     import json as _json
-    dump = _json.dumps(matches[0], ensure_ascii=False, indent=2)
 
-    for i in range(0, len(dump), 3500):
-        bot.send_message(message.chat.id, f"```\n{dump[i:i+3500]}\n```", parse_mode="Markdown")
+    for panel in (PANEL_1, PANEL_2):
+        try:
+            config, _ = panel_auth(panel["base_url"], panel["api_route"], panel["api_key"], panel["master_key"])
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ خطا در اتصال به {panel['label']}: {e}")
+            continue
+
+        users = config.get("users") or []
+        matches = [u for u in users if u.get("name") == target_name]
+
+        if not matches:
+            bot.send_message(message.chat.id, f"ℹ️ روی {panel['label']} کاربری با این اسم پیدا نشد.")
+            continue
+
+        dump = _json.dumps(matches[0], ensure_ascii=False, indent=2)
+        bot.send_message(message.chat.id, f"✅ پیدا شد روی {panel['label']}:")
+        for i in range(0, len(dump), 3500):
+            bot.send_message(message.chat.id, f"```\n{dump[i:i+3500]}\n```", parse_mode="Markdown")
 
 
 # ================= ADMIN PANEL (مدیریت) =================
@@ -1008,7 +1088,8 @@ def admin_callbacks(call):
     elif action == "admin_delete_config":
         msg = bot.send_message(
             call.message.chat.id,
-            "اسم دقیق کانفیگ روی پنل رو بفرست (همون بخش بعد از ?sub= توی لینک اشتراک کاربر):"
+            "اسم دقیق کانفیگ روی پنل رو بفرست (همون بخش بعد از ?sub= توی لینک اشتراک کاربر).\n"
+            "هر دو پنل به‌ترتیب چک می‌شن تا کانفیگ پیدا و حذف بشه:"
         )
         bot.register_next_step_handler(msg, process_delete_config)
 
@@ -1171,15 +1252,31 @@ def process_delete_config(message):
         return
 
     name = message.text.strip()
-    processing_msg = bot.reply_to(message, "⏳ در حال حذف از پنل...")
+    processing_msg = bot.reply_to(message, "⏳ در حال جست‌وجو و حذف از پنل‌ها...")
 
-    try:
-        panel_delete_profile(name)
-    except Exception as e:
-        bot.edit_message_text(f"❌ حذف انجام نشد: {e}", message.chat.id, processing_msg.message_id)
-        return
+    errors = []
+    deleted_from = None
 
-    bot.edit_message_text(f"✅ کانفیگ '{name}' از پنل حذف شد.", message.chat.id, processing_msg.message_id)
+    for panel in (PANEL_1, PANEL_2):
+        try:
+            delete_profile_on(panel, name)
+            deleted_from = panel["label"]
+            break
+        except Exception as e:
+            errors.append(f"{panel['label']}: {e}")
+
+    if deleted_from:
+        bot.edit_message_text(
+            f"✅ کانفیگ '{name}' از {deleted_from} حذف شد.",
+            message.chat.id,
+            processing_msg.message_id
+        )
+    else:
+        bot.edit_message_text(
+            "❌ حذف انجام نشد، کاربر روی هیچ‌کدوم از پنل‌ها پیدا نشد یا خطا رخ داد:\n" + "\n".join(errors),
+            message.chat.id,
+            processing_msg.message_id
+        )
 
 
 def send_users_csv(chat_id):
