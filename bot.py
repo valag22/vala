@@ -133,9 +133,9 @@ def block_if_banned(message):
 # ================= PLANS =================
 
 PLANS = {
-    "single": {"title": "یک کاربره", "price": 50000, "profiles": 1, "days": 30, "conn_limit": 1},
-    "double": {"title": "دو کاربره", "price": 60000, "profiles": 1, "days": 30, "conn_limit": 2},
-    "unlimited": {"title": "نامحدود", "price": 70000, "profiles": 1, "days": 30, "conn_limit": None},
+    "single": {"title": "یک کاربره", "price": 60000, "profiles": 1, "days": 30, "conn_limit": 1},
+    "double": {"title": "دو کاربره", "price": 70000, "profiles": 1, "days": 30, "conn_limit": 2},
+    "unlimited": {"title": "نامحدود", "price": 90000, "profiles": 1, "days": 30, "conn_limit": None},
 }
 
 # ================= TRIAL =================
@@ -497,6 +497,7 @@ def free_trial(message):
         return
 
     user_id = message.from_user.id
+    admin_unlimited = is_admin(user_id)
 
     cursor.execute("SELECT trial_used FROM users WHERE user_id=?", (user_id,))
     row = cursor.fetchone()
@@ -507,7 +508,7 @@ def free_trial(message):
     else:
         trial_used = row[0]
 
-    if trial_used:
+    if trial_used and not admin_unlimited:
         bot.reply_to(message, "❌ شما قبلاً از تست رایگان استفاده کرده‌اید. برای خرید از منوی «خرید کانفیگ» استفاده کنید.")
         return
 
@@ -530,8 +531,9 @@ def free_trial(message):
         )
         return
 
-    cursor.execute("UPDATE users SET trial_used = 1 WHERE user_id = ?", (user_id,))
-    conn.commit()
+    if not admin_unlimited:
+        cursor.execute("UPDATE users SET trial_used = 1 WHERE user_id = ?", (user_id,))
+        conn.commit()
 
     config_text = "\n".join(links)
 
