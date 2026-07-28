@@ -36,14 +36,14 @@ PANEL_API_ROUTE_2 = os.environ.get("PANEL_API_ROUTE_2", "sync")
 PANEL_API_KEY_2 = os.environ.get("PANEL_API_KEY_2", "nahan_ms4emj2m_la6w4iaj")
 PANEL_MASTER_KEY_2_FALLBACK = os.environ.get("PANEL_MASTER_KEY_2", "vala92")
 
-# چند ادمین: با کاما جدا کن، مثال: "6059940165,111111111"
+# چند ادمین: آیدی‌های عددی رو مستقیم اینجا اضافه/کم کن (این لیست دیگه از env خونده نمیشه)
 ADMIN_ID = 6059940165  # ادمین اصلی (برای سازگاری با کد قبلی)
-ADMIN_IDS = set()
-for _piece in os.environ.get("ADMIN_IDS", str(ADMIN_ID)).split(","):
-    _piece = _piece.strip()
-    if _piece.isdigit():
-        ADMIN_IDS.add(int(_piece))
-ADMIN_IDS.add(ADMIN_ID)
+ADMIN_IDS = {
+    6059940165,
+    # می‌تونی آیدی‌های عددی ادمین‌های دیگه رو هم اینجا با کاما اضافه کنی، مثلاً:
+    # 111111111,
+    # 222222222,
+}
 
 
 def is_admin(user_id):
@@ -133,9 +133,9 @@ def block_if_banned(message):
 # ================= PLANS =================
 
 PLANS = {
-    "single": {"title": "یک کاربره", "price": 50000, "profiles": 1, "days": 30, "conn_limit": 1},
-    "double": {"title": "دو کاربره", "price": 60000, "profiles": 1, "days": 30, "conn_limit": 2},
-    "unlimited": {"title": "نامحدود", "price": 70000, "profiles": 1, "days": 30, "conn_limit": None},
+    "single": {"title": "یک کاربره", "price": 60000, "profiles": 1, "days": 30, "conn_limit": 1},
+    "double": {"title": "دو کاربره", "price": 70000, "profiles": 1, "days": 30, "conn_limit": 2},
+    "unlimited": {"title": "نامحدود", "price": 90000, "profiles": 1, "days": 30, "conn_limit": None},
 }
 
 # ================= TRIAL =================
