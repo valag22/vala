@@ -30,7 +30,7 @@ PANEL_AUTH_HEADERS = {"Authorization": f"Bearer {PANEL_API_KEY}"}
 
 # ---- پنل دوم (برای کانفیگ‌های خرید/نامحدود) ----
 # مقادیر زیر رو با اطلاعات پنل دومت پر کن (یا با env var ست کن)
-PANEL_BASE_2 = os.environ.get("PANEL_BASE_2", "https://odd-hill-595b.valasharif92.workers.dev")
+PANEL_BASE_2 = os.environ.get("PANEL_BASE_2", "https://lively-snow-f0bf.valashyt-b28.workers.dev")
 PANEL_API_ROUTE_2 = os.environ.get("PANEL_API_ROUTE_2", "sync")
 
 PANEL_API_KEY_2 = os.environ.get("PANEL_API_KEY_2", "nahan_ms4emj2m_la6w4iaj")
